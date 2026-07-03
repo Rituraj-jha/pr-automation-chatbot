@@ -4,12 +4,18 @@
 resource_type: s3
 display_name: "S3 Bucket"
 description: "S3 storage bucket for Minerva data lake"
+file_name_field: bucket_name
+
+# Pre-validation gates (s3 does not require data owner approval)
+pre_validations: []
 
 # Fields the user provides
 collect_fields:
   - name: plat_env
     label: "Environment"
     description: "Target platform environment"
+    group: identity
+    session_reuse: true
     required: true
     options:
       - value: dev
@@ -27,13 +33,17 @@ collect_fields:
   - name: intake_id
     label: "Intake ID"
     description: "Request tracking ID (e.g. M0000485)"
+    group: identity
+    session_reuse: true
     required: true
     placeholder: "e.g. M021213"
-    validation: "^[A-Za-z]\\d+$"
+    validation: "^[MI]\\d+$"
 
   - name: usage_type
     label: "Usage Type"
     description: "Purpose category of the bucket"
+    group: s3_specific
+    session_reuse: false
     required: true
     options:
       - value: Source
@@ -64,6 +74,8 @@ collect_fields:
   - name: enterprise_or_func_name
     label: "Enterprise"
     description: "Enterprise or functional area"
+    group: identity
+    session_reuse: true
     required: true
     options:
       - value: AGTR
@@ -90,9 +102,13 @@ collect_fields:
   - name: enterprise_or_func_subgrp_name
     label: "Subgroup"
     description: "Subgroup within the enterprise (e.g. APAC, FIN). Can be empty."
+    group: identity
+    session_reuse: true
+    depends_on: enterprise_or_func_name
     required: true
     allow_empty: true
     placeholder: "e.g. APAC, FIN, PRGL (or leave empty)"
+    required_when: "enterprise_or_func_name == CORP"
     normalize_case: upper
 
 # Fields derived automatically (never ask user)
@@ -175,9 +191,45 @@ yaml_output:
       value: true
 
 # Account constraints (which usage_type goes with which account type)
+# Used by derive_tools for account resolution + reviewer for validation
 constraints:
   usage_type_account:
     Source: lakehouse
     DataProduct: compute
-    Scripts: any
-    EngAssets: any
+    Scripts: lakehouse
+    EngAssets: lakehouse
+
+# Validations run after derivation (reviewer uses these)
+validations:
+  - name: bucket_name_format
+    type: regex
+    check_field: bucket_name
+    pattern: "^[a-z0-9][a-z0-9\\-]{2,62}$"
+    error: "Bucket name must be DNS-compliant lowercase with hyphens only"
+
+  - name: enterprise_in_name
+    type: contains
+    check_field: bucket_name
+    must_contain_field: enterprise_or_func_name
+    transform: lower
+    error: "Bucket name must contain the enterprise abbreviation"
+
+  - name: suffix_matches_usage
+    type: ends_with
+    check_field: bucket_name
+    suffix_from: derivation.bucket_name.suffix_map
+    key_field: usage_type
+    error: "Bucket name suffix must match usage_type (src/dp/scripts/eng-assets)"
+
+  - name: subgrp_for_corp
+    type: required_if
+    field: enterprise_or_func_subgrp_name
+    when: "enterprise_or_func_name == CORP"
+    error: "CORP enterprise requires a subgroup"
+
+  - name: account_matches_usage
+    type: account_type_check
+    check_field: aws_account_id
+    expected_type_from: constraints.usage_type_account
+    key_field: usage_type
+    error: "Account ID doesn't match expected account type for this usage_type"

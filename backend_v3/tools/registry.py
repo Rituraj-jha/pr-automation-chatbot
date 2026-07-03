@@ -7,9 +7,12 @@ from __future__ import annotations
 from typing import Callable, Any
 
 from tools.session_tools import get_session_state, create_resources, drop_resource, clone_resource
-from tools.field_tools import set_fields, get_resource_info, edit_derived_field
+from tools.field_tools import set_fields, get_resource_info, edit_derived_field, get_common_fields
 from tools.derive_tools import derive_fields
 from tools.generate_tools import generate_yaml
+from tools.validate_tools import validate_fields
+from tools.reviewer_tools import review_yaml
+from tools.intake_tools import check_intake_id, validate_approval_image
 from tools.preference_tools import update_user_profile
 from tools.pr_tools import create_pr
 
@@ -22,9 +25,14 @@ TOOL_FUNCTIONS: dict[str, Callable] = {
     "clone_resource": clone_resource,
     "set_fields": set_fields,
     "get_resource_info": get_resource_info,
+    "get_common_fields": get_common_fields,
     "edit_derived_field": edit_derived_field,
     "derive_fields": derive_fields,
     "generate_yaml": generate_yaml,
+    "validate_fields": validate_fields,
+    "review_yaml": review_yaml,
+    "check_intake_id": check_intake_id,
+    "validate_approval_image": validate_approval_image,
     "update_user_profile": update_user_profile,
     "create_pr": create_pr,
 }
@@ -193,7 +201,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "generate_yaml",
-            "description": "Generate the final YAML output for a confirmed resource. Only call after user explicitly confirms.",
+            "description": "Generate the final YAML output for a confirmed resource. Only call after user explicitly confirms. Auto-triggers review_yaml via guardrail.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -203,6 +211,97 @@ TOOL_SCHEMAS: list[dict] = [
                     },
                 },
                 "required": ["resource_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_common_fields",
+            "description": "Find fields shared across multiple resource types for multi-resource batching. Returns common fields (ask once for all) and specific fields (ask per resource).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "resource_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of resource types to compare (e.g. ['s3', 'glue_db'])",
+                    },
+                },
+                "required": ["resource_types"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "validate_fields",
+            "description": "Run 4-stage validation pipeline on a resource's fields (normalize → static → dependent → cross-field). Call to explicitly validate before storing, or to check current state.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "resource_id": {
+                        "type": "string",
+                        "description": "ID of the resource to validate",
+                    },
+                    "fields": {
+                        "type": "object",
+                        "description": "Specific fields to validate. If omitted, validates all collected fields.",
+                    },
+                },
+                "required": ["resource_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "review_yaml",
+            "description": "Run business-rule review on a confirmed resource. Quality gate between CONFIRMING and DONE. Normally auto-triggered after generate_yaml — call manually only to re-review after fixing errors.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "resource_id": {
+                        "type": "string",
+                        "description": "ID of the resource to review",
+                    },
+                },
+                "required": ["resource_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_intake_id",
+            "description": "Check if an intake ID exists in the approved intake list (Power BI). Call this after the user provides their intake_id to verify it's valid before proceeding.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "intake_id": {
+                        "type": "string",
+                        "description": "The intake ID to validate (e.g. 'M0000485')",
+                    },
+                },
+                "required": ["intake_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "validate_approval_image",
+            "description": "Validate data owner approval for resources that require it (e.g. glue_db). Call this BEFORE creating resources that have pre_validations: [data_owner_approval] in their config. For now, pass the resource_types that need approval.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "resource_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of resource types that require approval (e.g. ['glue_db'])",
+                    },
+                },
+                "required": ["resource_types"],
             },
         },
     },

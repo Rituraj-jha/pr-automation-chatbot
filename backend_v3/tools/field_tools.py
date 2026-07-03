@@ -91,6 +91,17 @@ async def set_fields(resource_id: str, fields: dict, **kwargs) -> str:
     if not resource:
         return json.dumps({"error": f"Resource '{resource_id}' not found"})
 
+    if resource.status in (ResourceStatus.DONE, ResourceStatus.DROPPED):
+        return json.dumps({"error": f"Cannot set fields — resource status is '{resource.status.value}'. Resource is finalized."})
+
+    # If user changes a collected field while in CONFIRMING/REVIEWING, revert to COLLECTING
+    # (re-derive will be needed since collected inputs changed)
+    if resource.status in (ResourceStatus.CONFIRMING, ResourceStatus.REVIEWING):
+        resource.status = ResourceStatus.COLLECTING
+        resource.derived_fields = {}
+        resource.user_overrides = {}
+        resource.yaml_output = None
+
     config = _load_resource_config(resource.resource_type)
     if not config:
         return json.dumps({"error": f"No config for resource type '{resource.resource_type}'"})
@@ -193,8 +204,8 @@ async def edit_derived_field(resource_id: str, field_name: str, value: str, **kw
     if not resource:
         return json.dumps({"error": f"Resource '{resource_id}' not found"})
 
-    if resource.status not in (ResourceStatus.CONFIRMING, ResourceStatus.COLLECTING):
-        return json.dumps({"error": f"Cannot edit — resource status is {resource.status.value}"})
+    if resource.status not in (ResourceStatus.CONFIRMING, ResourceStatus.REVIEWING):
+        return json.dumps({"error": f"Cannot edit derived fields — resource must be in 'confirming' or 'reviewing' state. Current: {resource.status.value}"})
 
     config = _load_resource_config(resource.resource_type)
     if not config:
@@ -234,4 +245,64 @@ async def edit_derived_field(resource_id: str, field_name: str, value: str, **kw
         "old_value": resource.derived_fields.get(field_name),
         "new_value": value,
         "source": "user_override",
+    })
+
+
+async def get_common_fields(resource_types: list[str], **kwargs) -> str:
+    """Find fields shared across multiple resource types (same name + same group).
+
+    Used to identify which fields to ask once for all resources (multi-resource batching).
+    Returns: {common_fields: [...], specific_fields: {type: [...]}}
+    """
+    if not resource_types:
+        return json.dumps({"error": "No resource types provided"})
+
+    # Load configs for each type
+    configs: dict[str, dict] = {}
+    for rt in resource_types:
+        config = _load_resource_config(rt)
+        if config:
+            configs[rt] = config
+
+    if len(configs) < 2:
+        # Only one type — everything is "specific"
+        if configs:
+            rt = list(configs.keys())[0]
+            fields = [f["name"] for f in configs[rt].get("collect_fields", [])]
+            return json.dumps({"common_fields": [], "specific_fields": {rt: fields}})
+        return json.dumps({"common_fields": [], "specific_fields": {}})
+
+    # Build field→group map per resource type
+    field_groups: dict[str, dict[str, str]] = {}  # {resource_type: {field_name: group}}
+    for rt, config in configs.items():
+        field_groups[rt] = {}
+        for f in config.get("collect_fields", []):
+            field_groups[rt][f["name"]] = f.get("group", "")
+
+    # Find common fields: same name AND same group across ALL types
+    all_field_names = set()
+    for fg in field_groups.values():
+        all_field_names.update(fg.keys())
+
+    common_fields = []
+    for field_name in all_field_names:
+        # Check if this field exists in ALL types
+        in_all = all(field_name in fg for fg in field_groups.values())
+        if not in_all:
+            continue
+        # Check if same non-empty group
+        groups = {fg[field_name] for fg in field_groups.values()}
+        if len(groups) == 1 and "" not in groups:
+            common_fields.append(field_name)
+
+    # Specific fields = fields NOT in common
+    specific_fields: dict[str, list[str]] = {}
+    for rt, fg in field_groups.items():
+        specific = [f for f in fg if f not in common_fields]
+        if specific:
+            specific_fields[rt] = specific
+
+    return json.dumps({
+        "common_fields": sorted(common_fields),
+        "specific_fields": specific_fields,
     })

@@ -4,6 +4,13 @@
 resource_type: glue_db
 display_name: "Glue Database"
 description: "AWS Glue Database for Minerva Lakehouse or Compute accounts"
+file_name_field: database_name
+
+# Pre-validation gates (glue_db requires data owner approval)
+pre_validations:
+  - type: data_owner_approval
+    required: true
+    description: "Screenshot of data owner approval from intake system"
 
 # Fields the user provides
 collect_fields:
@@ -11,6 +18,7 @@ collect_fields:
     label: "Platform Environment"
     description: "Target platform environment"
     group: identity
+    session_reuse: true
     required: true
     options:
       - value: dev
@@ -33,6 +41,7 @@ collect_fields:
     label: "Intake ID"
     description: "Request tracking ID (e.g. M0000451)"
     group: identity
+    session_reuse: true
     required: true
     placeholder: "e.g. M0000451"
     validation: "^[MI]\\d+$"
@@ -40,7 +49,8 @@ collect_fields:
   - name: data_construct
     label: "Data Construct"
     description: "Whether this DB holds source data or a data product"
-    group: identity
+    group: glue_specific
+    session_reuse: false
     required: true
     options:
       - value: Source
@@ -59,7 +69,9 @@ collect_fields:
   - name: data_layer
     label: "Data Layer"
     description: "Which logical layer the database belongs to"
-    group: identity
+    group: glue_specific
+    session_reuse: false
+    depends_on: data_construct
     required: true
     options:
       - value: raw
@@ -84,7 +96,9 @@ collect_fields:
   - name: data_env
     label: "Data Environment"
     description: "Data environment tag (often same as plat_env, but can differ)"
-    group: identity
+    group: glue_specific
+    session_reuse: false
+    default_from: plat_env
     required: true
     options:
       - value: dev
@@ -112,7 +126,8 @@ collect_fields:
   - name: source_name
     label: "Source Name"
     description: "Governance-approved source system name (e.g. cdp, concur, sap_tc1, jdee1)"
-    group: identity
+    group: glue_specific
+    session_reuse: false
     required: true
     placeholder: "e.g. cdp, concur, sap_tc1, jdee1, iiq"
     normalize_case: lower
@@ -121,6 +136,7 @@ collect_fields:
     label: "Enterprise"
     description: "Enterprise or functional area"
     group: identity
+    session_reuse: true
     required: true
     options:
       - value: AGTR
@@ -148,6 +164,8 @@ collect_fields:
     label: "Subgroup"
     description: "Subgroup within the enterprise (e.g. FIN, DTD, APAC). Required for CORP."
     group: identity
+    session_reuse: true
+    depends_on: enterprise_or_func_name
     required: false
     allow_empty: true
     required_when: "enterprise_or_func_name == CORP"
@@ -158,6 +176,7 @@ collect_fields:
     label: "Data Owner Email"
     description: "Cargill email of the data owner"
     group: ownership
+    session_reuse: true
     required: true
     placeholder: "e.g. john_doe@cargill.com"
     validation: "^[a-zA-Z0-9_.+-]+@cargill\\.com$"
@@ -166,6 +185,7 @@ collect_fields:
     label: "Data Owner GitHub Username"
     description: "Cargill GitHub Enterprise username of the data owner"
     group: ownership
+    session_reuse: true
     required: true
     placeholder: "e.g. JohnDoe"
 
@@ -173,6 +193,7 @@ collect_fields:
     label: "Data Leader"
     description: "Name or PSID of the data leader"
     group: ownership
+    session_reuse: true
     required: true
     placeholder: "e.g. k745239 or Jane Smith"
 
@@ -280,6 +301,20 @@ validations:
     check_field: database_name
     pattern: "^[a-z0-9_]+$"
     error: "Database name must be lowercase snake_case (a-z0-9_ only)"
+
+  - name: layer_construct_match
+    type: allowed_values
+    check_field: data_layer
+    allowed_from: dependent_fields.data_construct_to_data_layer
+    key_field: data_construct
+    error: "Source only allows raw/raw_serving. DataProduct allows curated/serving/internal."
+
+  - name: account_matches_construct
+    type: account_type_check
+    check_field: aws_account_id
+    expected_type_from: constraints.data_construct_account
+    key_field: data_construct
+    error: "Account ID doesn't match expected account type for this data_construct"
 
 # YAML output rules
 yaml_output:

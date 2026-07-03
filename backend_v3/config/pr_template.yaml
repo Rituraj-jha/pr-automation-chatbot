@@ -1,0 +1,121 @@
+# PR Template Configuration
+# Defines intake questions, auto-fill strategies, labels, and body formatting.
+# Used by: pr_tools.py (create_pr), system.md (LLM guidance), frontend (PR form).
+
+# Intake questions — asked before PR creation
+# auto_fill: strategy to derive answer without asking (null = always ask)
+intake_questions:
+  - id: objective
+    question: "What is the objective of this request?"
+    required: true
+    auto_fill:
+      strategy: derive_from_resources
+      template: "Provision {resource_count} {resource_types} for {enterprise} in {plat_env}"
+    example: "Provision S3 source bucket and Glue database for AGTR APAC in production"
+
+  - id: intake_approval
+    question: "Has this been approved via intake process? (Intake ID)"
+    required: true
+    auto_fill:
+      strategy: from_session_field
+      field: intake_id
+    example: "Yes — M0000485"
+
+  - id: data_flow
+    question: "Describe the data flow classification (source system → destination)"
+    required: true
+    auto_fill: null  # always ask
+    example: "SAP TC1 → Raw → Raw Serving (AGTR APAC)"
+
+  - id: consumers
+    question: "Who are the downstream consumers of this data?"
+    required: true
+    auto_fill: null  # always ask
+    example: "Finance reporting team, BI dashboards"
+
+  - id: pii
+    question: "Does this resource contain PII/sensitive data?"
+    required: true
+    auto_fill: null  # always ask
+    options: ["Yes", "No", "Unknown — pending classification"]
+    example: "No"
+
+  - id: compliance
+    question: "Any compliance/regulatory requirements? (GDPR, SOX, etc.)"
+    required: false
+    auto_fill: null
+    default: "None"
+    example: "SOX compliance required for financial data"
+
+# Labels applied to PR
+# derive: how to compute label value from session context
+# ask: if derive fails, ask user
+labels:
+  - prefix: "ENV"
+    derive:
+      strategy: from_resource_field
+      field: plat_env
+      transform: null  # value is already dev/prd
+    values: [dev, prd, snd]
+    required: true
+
+  - prefix: "Enterprise"
+    derive:
+      strategy: from_resource_field
+      field: enterprise_or_func_name
+    values: [AGTR, CORP, FOOD, SPEC]
+    required: true
+
+  - prefix: "Subgroup"
+    derive:
+      strategy: from_resource_field
+      field: enterprise_or_func_subgrp_name
+    skip_if_empty: true
+    required: false
+
+  - prefix: "Wave"
+    derive: null  # always ask
+    ask: "Which wave does this belong to?"
+    values: [W1, W2, W3, W4]
+    session_reuse: true  # remember within session
+    required: true
+
+  - prefix: "Team"
+    derive: null  # always ask first time, then remember
+    ask: "Which team owns this request?"
+    values: [DataEng, Analytics, Platform, Governance]
+    session_reuse: true
+    profile_reuse: true  # store in user_profile for future sessions
+    required: true
+
+  # Static label — always applied, never asked
+  - name: "CREATED_BY:MiNi"
+    static: true
+    required: true
+
+# PR body template (Markdown)
+# Placeholders: {intake_answers.*}, {resource_summary}, {labels_list}
+body_template: |
+  ## MIW Object Provisioning Request
+
+  ### Intake Information
+  | Question | Answer |
+  |----------|--------|
+  | Objective | {intake_answers.objective} |
+  | Intake Approval | {intake_answers.intake_approval} |
+  | Data Flow | {intake_answers.data_flow} |
+  | Consumers | {intake_answers.consumers} |
+  | PII/Sensitive | {intake_answers.pii} |
+  | Compliance | {intake_answers.compliance} |
+
+  ### Resources
+  {resource_summary}
+
+  ### Labels
+  {labels_list}
+
+  ---
+  *Created by MiNi — Minerva Infrastructure Provisioning Assistant*
+
+# PR title template
+title_template: "[MiNi] {resource_types} — {enterprise} {plat_env} ({intake_id})"

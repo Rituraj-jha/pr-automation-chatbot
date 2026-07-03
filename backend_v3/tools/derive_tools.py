@@ -224,6 +224,9 @@ async def derive_fields(resource_id: str, **kwargs) -> str:
     if not resource:
         return json.dumps({"error": f"Resource '{resource_id}' not found"})
 
+    if resource.status in (ResourceStatus.DONE, ResourceStatus.DROPPED):
+        return json.dumps({"error": f"Cannot derive — resource status is '{resource.status.value}'. Resource is finalized."})
+
     # Guard: all required collect_fields must be present before deriving
     config = _load_resource_config(resource.resource_type)
     missing = []

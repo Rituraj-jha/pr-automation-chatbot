@@ -1,0 +1,41 @@
+# Dependent Field Option Mapping
+# When a parent field is set, child field options are filtered to only valid combos.
+# Used by: validate_tools.py (stage 3: dependent validation), reviewer_tools.py, frontend dropdowns.
+# Source of truth: accounts.yaml enterprises section + business rules.
+
+# Enterprise → valid subgroups
+# Referenced by: enterprise_or_func_subgrp_name (depends_on: enterprise_or_func_name)
+enterprise_to_subgroup:
+  AGTR:
+    required: false
+    options: [APAC, LATAM, NA, TDA, WTG]
+  CORP:
+    required: true
+    options: [DTD, FIN, FSQR, GTC, CPT, EHS, DPE]
+  FOOD:
+    required: false
+    options: [PRGL, FSGL, PR_NA]
+  SPEC:
+    required: false
+    options: [ANH, BIO]
+
+# Data construct → valid data layers (glue_db only)
+# Referenced by: data_layer (depends_on: data_construct)
+data_construct_to_data_layer:
+  Source:
+    options: [raw, raw_serving]
+  DataProduct:
+    options: [curated, serving, internal]
+
+# Usage type → account type (s3 only)
+# Referenced by: derive_tools for account resolution
+usage_type_to_account_type:
+  Source: lakehouse
+  DataProduct: compute
+  Scripts: lakehouse
+  EngAssets: lakehouse
+
+# Data construct → account type (glue_db only)
+data_construct_to_account_type:
+  Source: lakehouse
+  DataProduct: compute

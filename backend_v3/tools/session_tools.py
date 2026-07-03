@@ -86,8 +86,59 @@ def _load_supported_resources() -> list[str]:
         path = _CONFIG_DIR / "settings.yaml"
         with open(path, "r", encoding="utf-8") as f:
             data = pyyaml.safe_load(f)
-        _supported_resources = data.get("supported_resources", [])
+        raw = data.get("supported_resources", [])
+        # Support both flat list ["s3"] and object list [{"type": "s3", ...}]
+        _supported_resources = [
+            (r["type"] if isinstance(r, dict) else r) for r in raw
+        ]
     return _supported_resources
+
+
+def _normalize_initial_field(field_name: str, value: Any, config: dict) -> Any:
+    """Normalize an initial_field value using config normalize map + options."""
+    if value is None:
+        return value
+    str_value = str(value).strip()
+    for field_spec in config.get("collect_fields", []):
+        if field_spec["name"] != field_name:
+            continue
+        # Lookup normalization map
+        normalize_map = field_spec.get("normalize", {})
+        if normalize_map:
+            lookup = str_value.lower()
+            if lookup in normalize_map:
+                return normalize_map[lookup]
+        # Case-insensitive match against options
+        options = field_spec.get("options", [])
+        if options:
+            for opt in options:
+                opt_val = opt["value"] if isinstance(opt, dict) else str(opt)
+                if opt_val.lower() == str_value.lower():
+                    return opt_val
+        break
+    return str_value
+
+
+def _validate_initial_field(field_name: str, value: Any, config: dict) -> bool:
+    """Check if a normalized value is valid for a field. Returns False if invalid."""
+    for field_spec in config.get("collect_fields", []):
+        if field_spec["name"] != field_name:
+            continue
+        options = field_spec.get("options", [])
+        if options:
+            valid_values = [
+                (o["value"] if isinstance(o, dict) else str(o)) for o in options
+            ]
+            if value not in valid_values:
+                return False
+        # Regex validation
+        validation = field_spec.get("validation")
+        if validation and value:
+            import re
+            if not re.match(validation, str(value)):
+                return False
+        break
+    return True
 
 
 def bind_session(session: Session):
@@ -141,8 +192,13 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
         applied_initial = {}
         for k, v in initial.items():
             if k in valid_fields and v:
-                resource.collected_fields[k] = v
-                applied_initial[k] = v
+                # Normalize value
+                normalized = _normalize_initial_field(k, v, config)
+                # Validate against options
+                if not _validate_initial_field(k, normalized, config):
+                    continue  # Skip invalid values silently — LLM will re-ask
+                resource.collected_fields[k] = normalized
+                applied_initial[k] = normalized
 
         # 2. Prefill remaining fields from session history (won't overwrite initial_fields)
         prefilled = _prefill_from_session(session, resource)

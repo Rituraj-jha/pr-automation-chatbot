@@ -1,94 +1,97 @@
 # AWS Account Directory
 # Source: Minerva Multi-Account Naming Conventions
-# Tools use this for derivation + validation. LLM never reads this directly.
+# derive_tools.py reads: accounts[].id, .abbreviation, .plat_env, .type, .enterprise
+# dependent_fields.yaml references enterprises section for subgroup validation.
 
 accounts:
-  # Dev Lakehouse
+  # Dev Lakehouse (shared across all enterprises)
   - id: "438465132548"
-    alias: minerva-dev-lakehouse-001
     abbreviation: dev-lh1
     plat_env: dev
     type: lakehouse
-    enterprise: all  # any enterprise can use lakehouse
+    enterprise: all
 
-  # Dev Compute
+  # Dev Compute (one per enterprise)
   - id: "068887784423"
-    alias: minerva-dev-compute-001
     abbreviation: dev-cmp1
+    compute_number: 1
     plat_env: dev
     type: compute
     enterprise: AGTR
 
   - id: "933999308564"
-    alias: minerva-dev-compute-002
     abbreviation: dev-cmp2
+    compute_number: 2
     plat_env: dev
     type: compute
     enterprise: FOOD
 
   - id: "836901248866"
-    alias: minerva-dev-compute-003
     abbreviation: dev-cmp3
+    compute_number: 3
     plat_env: dev
     type: compute
     enterprise: SPEC
 
   - id: "324612370323"
-    alias: minerva-dev-compute-004
     abbreviation: dev-cmp4
+    compute_number: 4
     plat_env: dev
     type: compute
     enterprise: CORP
 
-  # Prod Lakehouse
+  # Prod Lakehouse (shared across all enterprises)
   - id: "578647603827"
-    alias: minerva-prod-lakehouse-001
     abbreviation: prd-lh1
     plat_env: prd
     type: lakehouse
     enterprise: all
 
-  # Prod Compute
+  # Prod Compute (one per enterprise)
   - id: "367241115350"
-    alias: minerva-prod-compute-001
     abbreviation: prd-cmp1
+    compute_number: 1
     plat_env: prd
     type: compute
     enterprise: AGTR
 
   - id: "884308299029"
-    alias: minerva-prod-compute-002
     abbreviation: prd-cmp2
+    compute_number: 2
     plat_env: prd
     type: compute
     enterprise: FOOD
 
   - id: "011379513867"
-    alias: minerva-prod-compute-003
     abbreviation: prd-cmp3
+    compute_number: 3
     plat_env: prd
     type: compute
     enterprise: SPEC
 
   - id: "632247962242"
-    alias: minerva-prod-compute-004
     abbreviation: prd-cmp4
+    compute_number: 4
     plat_env: prd
     type: compute
     enterprise: CORP
 
-# Enterprise ↔ Subgroup mapping (for validation)
+# Enterprise ↔ Subgroup mapping
+# Used by dependent_fields.yaml for dynamic option filtering + reviewer validation
 enterprises:
   AGTR:
     name: "Ag & Trading"
+    subgroup_required: false
     subgroups: [APAC, LATAM, NA, TDA, WTG]
   CORP:
     name: "Corporate"
-    subgroups: [DTD, FIN, FSQR, GTC, CPT, EHS, DPE]
     subgroup_required: true
+    subgroups: [DTD, FIN, FSQR, GTC, CPT, EHS, DPE]
   FOOD:
     name: "Food"
+    subgroup_required: false
     subgroups: [PRGL, FSGL, PR_NA]
   SPEC:
     name: "Specialized Portfolio"
+    subgroup_required: false
     subgroups: [ANH, BIO]

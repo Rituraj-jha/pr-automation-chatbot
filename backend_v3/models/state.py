@@ -10,6 +10,7 @@ from typing import Any
 class ResourceStatus(str, Enum):
     COLLECTING = "collecting"
     CONFIRMING = "confirming"
+    REVIEWING = "reviewing"
     DONE = "done"
     DROPPED = "dropped"
 

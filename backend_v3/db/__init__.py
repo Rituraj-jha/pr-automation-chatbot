@@ -7,6 +7,7 @@ from db.repository import (
     save_message,
     save_preference, load_preferences,
     save_user_profile, load_user_profile,
+    save_session_field, load_session_fields,
 )
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "save_message",
     "save_preference", "load_preferences",
     "save_user_profile", "load_user_profile",
+    "save_session_field", "load_session_fields",
 ]

@@ -1,31 +1,31 @@
-# Application settings
-app:
-  name: "MiNi"
-  version: "3.0.0"
-  description: "Minerva Infrastructure Provisioning Assistant"
+# MiNi Agent — Application Settings
+# Only keys actually consumed by agent code live here.
+# LLM config comes from .env (TRUEFOUNDRY_API_KEY, MODEL_NAME, etc.)
+# DB path is hardcoded in api.py. Agent max iterations is hardcoded in loop.py.
 
-# LLM configuration (overridden by .env)
-llm:
-  provider: truefoundry_openai
-  model: openai/gpt-4o-mini
-  temperature: 0.1
-  max_tokens: 4096
-
-# Agent behavior
-agent:
-  max_tool_calls_per_turn: 10
-  max_fields_per_question: 4
-  history_summarize_after: 30  # messages before summarization kicks in
-
-# Database
-db:
-  path: "mini.db"
-
-# Supported resource types (add new ones here — agent auto-discovers)
+# Supported resource types — agent uses this for intent classification
 supported_resources:
-  - s3
-  - glue_db
-  # - iam
-  # - resource_policy
-  # - smus_project
-  # - smus_role
+  - type: s3
+    display: "S3 Bucket"
+    aliases: [bucket, s3 bucket, storage, s3, object storage, s3 storage]
+  - type: glue_db
+    display: "Glue Database"
+    aliases: [database, glue database, gluedb, glue db, catalog, glue catalog, db]
+  # - type: iam
+  #   display: "IAM Role"
+  #   aliases: [role, iam role, permissions, access role]
+
+# Message when user asks for unsupported resource
+unsupported_message: |
+  I can currently help provision these resources:
+  • **S3 Buckets** — storage for data lake
+  • **Glue Databases** — catalog for lakehouse/compute
+
+  Would you like to create one of these?
+
+# Intake ID validation settings
+intake_validation:
+  enabled: true
+  format_regex: "^[MI]\\d+$"
+  external_api: null  # future: URL to intake tracking system for status lookup
+  allow_proceed_on_not_found: true

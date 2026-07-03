@@ -101,8 +101,9 @@ async def generate_yaml(resource_id: str, **kwargs) -> str:
     if not resource:
         return json.dumps({"error": f"Resource '{resource_id}' not found"})
 
-    if resource.status not in (ResourceStatus.CONFIRMING, ResourceStatus.DONE):
-        return json.dumps({"error": f"Resource must be confirmed before YAML generation. Current status: {resource.status.value}"})
+    if resource.status not in (ResourceStatus.CONFIRMING, ResourceStatus.REVIEWING):
+        return json.dumps({"error": f"Resource must be in 'confirming' or 'reviewing' state for YAML generation. Current: {resource.status.value}"})
+
 
     config = _load_resource_config(resource.resource_type)
     all_fields = resource.all_fields
@@ -116,13 +117,12 @@ async def generate_yaml(resource_id: str, **kwargs) -> str:
         # Generic: just dump fields in order
         yaml_output = pyyaml.dump(all_fields, default_flow_style=False)
 
-    # Mark as done and store output
+    # Store YAML output but do NOT change status — reviewer guardrail handles DONE transition
     resource.yaml_output = yaml_output
-    resource.status = ResourceStatus.DONE
     await save_resource(session.session_id, resource)
 
     return json.dumps({
         "resource_id": resource.resource_id,
-        "status": "done",
+        "status": resource.status.value,
         "yaml": yaml_output,
     })

@@ -232,3 +232,28 @@ async def load_github_token(user_id: str) -> str | None:
     if rows:
         return rows[0]["token"]
     return None
+
+
+# ─── Session Fields (cross-resource reuse) ────────────────────────────────────
+
+async def save_session_field(session_id: str, field_name: str, field_value: str):
+    """Upsert a session-level field value for cross-resource reuse."""
+    db = await get_db()
+    await db.execute(
+        """INSERT INTO session_fields (session_id, field_name, field_value, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(session_id, field_name) DO UPDATE SET
+             field_value=excluded.field_value, updated_at=excluded.updated_at""",
+        (session_id, field_name, field_value, datetime.utcnow().isoformat()),
+    )
+    await db.commit()
+
+
+async def load_session_fields(session_id: str) -> dict[str, str]:
+    """Load all session-level field values for prefill."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT field_name, field_value FROM session_fields WHERE session_id = ?",
+        (session_id,),
+    )
+    return {r["field_name"]: r["field_value"] for r in rows}
