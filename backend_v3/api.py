@@ -268,9 +268,9 @@ def _build_structured_data(session: Session) -> dict | None:
     """
     active = [r for r in session.resources if r.status != ResourceStatus.DROPPED]
 
-    # Check for confirming resources → yaml_preview (send all confirming)
+    # Show YAML preview only when every active resource is confirming.
     confirming = [r for r in active if r.status == ResourceStatus.CONFIRMING]
-    if confirming:
+    if active and len(confirming) == len(active):
         previews = []
         for resource in confirming:
             config = _load_resource_config(resource.resource_type)
@@ -306,9 +306,77 @@ def _build_structured_data(session: Session) -> dict | None:
             "readonly_fields": previews[0]["readonly_fields"],
         }
 
-    # Check for collecting resources → field_prompts with options
+    # Check for collecting resources → field_prompts with options.
+    # For multiple resources, ask common missing fields first, then specific fields.
     collecting = [r for r in active if r.status == ResourceStatus.COLLECTING]
     if collecting:
+        if len(collecting) > 1:
+            resource_missing: list[dict[str, Any]] = []
+            missing_by_resource: dict[str, dict[str, dict[str, Any]]] = {}
+            group_by_resource: dict[str, dict[str, str]] = {}
+
+            for resource in collecting:
+                config = _load_resource_config(resource.resource_type)
+                if not config:
+                    continue
+                missing_by_resource[resource.resource_id] = {}
+                group_by_resource[resource.resource_id] = {}
+                for fs in config.get("collect_fields", []):
+                    field_name = fs["name"]
+                    group_by_resource[resource.resource_id][field_name] = fs.get("group", "")
+                    if field_name in resource.collected_fields:
+                        continue
+                    field_info: dict[str, Any] = {
+                        "field_name": field_name,
+                        "label": fs.get("label", field_name),
+                        "description": fs.get("description", ""),
+                    }
+                    if fs.get("options"):
+                        field_info["options"] = fs["options"]
+                    if fs.get("placeholder"):
+                        field_info["placeholder"] = fs["placeholder"]
+                    if fs.get("allow_empty"):
+                        field_info["allow_empty"] = True
+                    missing_by_resource[resource.resource_id][field_name] = field_info
+
+            if missing_by_resource:
+                resource_ids = list(missing_by_resource.keys())
+                common_names = set(missing_by_resource[resource_ids[0]].keys())
+                for rid in resource_ids[1:]:
+                    common_names &= set(missing_by_resource[rid].keys())
+
+                common_fields = []
+                for field_name in sorted(common_names):
+                    groups = {group_by_resource[rid].get(field_name, "") for rid in resource_ids}
+                    if len(groups) == 1 and "" not in groups:
+                        common_fields.append(missing_by_resource[resource_ids[0]][field_name])
+
+                if common_fields:
+                    return {
+                        "type": "field_prompts",
+                        "mode": "common_fields",
+                        "resource_ids": resource_ids,
+                        "resource_types": [r.resource_type for r in collecting],
+                        "fields": common_fields,
+                        "total_resources": len(active),
+                    }
+
+                for resource in collecting:
+                    fields = list(missing_by_resource.get(resource.resource_id, {}).values())
+                    if fields:
+                        resource_missing.append({
+                            "resource_id": resource.resource_id,
+                            "resource_type": resource.resource_type,
+                            "fields": fields,
+                        })
+                if resource_missing:
+                    return {
+                        "type": "field_prompts",
+                        "mode": "resource_specific",
+                        "resources": resource_missing,
+                        "total_resources": len(active),
+                    }
+
         resource = collecting[0]
         config = _load_resource_config(resource.resource_type)
         if config:

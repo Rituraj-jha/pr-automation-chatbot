@@ -83,6 +83,25 @@ def _extract_option_values(options: list) -> list[str]:
     return values
 
 
+async def _validate_external_field(field_name: str, value: Any) -> tuple[bool, str | None, dict | None]:
+    """Run external/pre-store validation for fields that need it."""
+    if field_name != "intake_id":
+        return True, None, None
+
+    from tools.intake_tools import check_intake_id
+
+    check_result = await check_intake_id(intake_id=str(value))
+    try:
+        check_data = json.loads(check_result)
+    except json.JSONDecodeError:
+        return False, "Could not validate intake ID. Please try again.", None
+
+    if not check_data.get("valid"):
+        return False, check_data.get("message", "Intake ID is not approved."), check_data
+
+    return True, None, check_data
+
+
 async def set_fields(resource_id: str, fields: dict, **kwargs) -> str:
     """Set field values on a resource with normalization."""
     session = _get_session()
@@ -94,28 +113,27 @@ async def set_fields(resource_id: str, fields: dict, **kwargs) -> str:
     if resource.status in (ResourceStatus.DONE, ResourceStatus.DROPPED):
         return json.dumps({"error": f"Cannot set fields — resource status is '{resource.status.value}'. Resource is finalized."})
 
-    # If user changes a collected field while in CONFIRMING/REVIEWING, revert to COLLECTING
-    # (re-derive will be needed since collected inputs changed)
-    if resource.status in (ResourceStatus.CONFIRMING, ResourceStatus.REVIEWING):
-        resource.status = ResourceStatus.COLLECTING
-        resource.derived_fields = {}
-        resource.user_overrides = {}
-        resource.yaml_output = None
-
     config = _load_resource_config(resource.resource_type)
     if not config:
         return json.dumps({"error": f"No config for resource type '{resource.resource_type}'"})
 
     set_fields_result = {}
     errors = {}
+    validation_details = {}
+    validated_fields = {}
 
     for field_name, value in fields.items():
         normalized = _normalize_value(field_name, value, config)
-        # Basic validation: check options if defined
         field_spec = next(
             (f for f in config.get("collect_fields", []) if f["name"] == field_name),
             None,
         )
+
+        if not field_spec:
+            errors[field_name] = f"'{field_name}' is not a collected field for {resource.resource_type}"
+            continue
+
+        # Basic validation: check options if defined
         if field_spec and field_spec.get("options"):
             option_values = _extract_option_values(field_spec["options"])
             if normalized not in option_values:
@@ -129,8 +147,29 @@ async def set_fields(resource_id: str, fields: dict, **kwargs) -> str:
                 errors[field_name] = f"Invalid format. Must match pattern: {validation}"
                 continue
 
-        resource.collected_fields[field_name] = normalized
-        set_fields_result[field_name] = normalized
+        external_valid, external_error, external_detail = await _validate_external_field(field_name, normalized)
+        if not external_valid:
+            errors[field_name] = external_error or "External validation failed"
+            if external_detail:
+                validation_details[field_name] = external_detail
+            continue
+
+        if external_detail:
+            validation_details[field_name] = external_detail
+        validated_fields[field_name] = normalized
+
+    if validated_fields:
+        # If user changes a collected field while in CONFIRMING/REVIEWING, revert to COLLECTING
+        # only after at least one new value has passed validation.
+        if resource.status in (ResourceStatus.CONFIRMING, ResourceStatus.REVIEWING):
+            resource.status = ResourceStatus.COLLECTING
+            resource.derived_fields = {}
+            resource.user_overrides = {}
+            resource.yaml_output = None
+
+        for field_name, normalized in validated_fields.items():
+            resource.collected_fields[field_name] = normalized
+            set_fields_result[field_name] = normalized
 
     # Check if all required collect_fields are now set
     all_collected = True
@@ -163,12 +202,14 @@ async def set_fields(resource_id: str, fields: dict, **kwargs) -> str:
             all_collected = False
             missing.append(field_name_spec)
 
-    await save_resource(session.session_id, resource)
+    if validated_fields:
+        await save_resource(session.session_id, resource)
 
     result = {
         "resource_id": resource.resource_id,
         "set": set_fields_result,
         "errors": errors if errors else None,
+        "validation_details": validation_details if validation_details else None,
         "collection_complete": all_collected,
         "missing_fields": missing if not all_collected else None,
     }
@@ -176,7 +217,7 @@ async def set_fields(resource_id: str, fields: dict, **kwargs) -> str:
 
 
 async def get_resource_info(resource_type: str, **kwargs) -> str:
-    """Get resource context (MD file) for the LLM to understand the resource."""
+    """Load the resource skill plus structured config summary for the LLM."""
     # Load the MD context file — this is what the LLM reads
     context_path = _CONTEXT_DIR / "resources" / f"{resource_type}.md"
     if context_path.exists():
@@ -184,16 +225,51 @@ async def get_resource_info(resource_type: str, **kwargs) -> str:
     else:
         context_md = f"No context available for resource type '{resource_type}'."
 
-    # Also include a brief field summary from config
     config = _load_resource_config(resource_type)
-    if config:
-        collect = [f["name"] for f in config.get("collect_fields", [])]
-        derive = [f["name"] for f in config.get("derive_fields", [])]
-        summary = f"\n\n---\nFields to collect from user: {collect}\nFields to derive automatically: {derive}"
-    else:
-        summary = ""
+    if not config:
+        return json.dumps({
+            "resource_type": resource_type,
+            "skill": context_md,
+            "error": f"No config found for resource type '{resource_type}'",
+        })
 
-    return context_md + summary
+    collect_fields = []
+    for field in config.get("collect_fields", []):
+        collect_fields.append({
+            "name": field.get("name"),
+            "label": field.get("label", field.get("name")),
+            "description": field.get("description", ""),
+            "group": field.get("group"),
+            "required": field.get("required", False),
+            "allow_empty": field.get("allow_empty", False),
+            "required_when": field.get("required_when"),
+            "depends_on": field.get("depends_on"),
+            "default_from": field.get("default_from"),
+            "session_reuse": field.get("session_reuse", False),
+            "options": _extract_option_values(field.get("options", [])) if field.get("options") else None,
+            "normalize": field.get("normalize"),
+            "normalize_case": field.get("normalize_case"),
+            "validation": field.get("validation"),
+        })
+
+    derived_fields = [
+        {
+            "name": field.get("name"),
+            "label": field.get("label", field.get("name")),
+            "editable": field.get("editable", "locked"),
+        }
+        for field in config.get("derive_fields", [])
+    ]
+
+    return json.dumps({
+        "resource_type": resource_type,
+        "display_name": config.get("display_name", resource_type),
+        "skill": context_md,
+        "pre_validations": config.get("pre_validations", []),
+        "collect_fields": collect_fields,
+        "derived_fields": derived_fields,
+        "file_name_field": config.get("file_name_field"),
+    }, indent=2)
 
 
 async def edit_derived_field(resource_id: str, field_name: str, value: str, **kwargs) -> str:

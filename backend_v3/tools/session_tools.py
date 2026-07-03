@@ -9,13 +9,14 @@ from typing import Any
 import yaml as pyyaml
 
 from models.state import Session, Resource, ResourceStatus
-from db.repository import save_resource
+from db.repository import save_resource, load_session_fields
 
 # Per-task session context — safe under concurrent async requests
 _session_var: ContextVar[Session | None] = ContextVar("_session_var", default=None)
 
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 _supported_resources: list[str] | None = None
+_supported_resource_entries: list[dict] | None = None
 
 
 def _load_resource_config(resource_type: str) -> dict | None:
@@ -94,6 +95,50 @@ def _load_supported_resources() -> list[str]:
     return _supported_resources
 
 
+def _load_supported_resource_entries() -> list[dict]:
+    """Load supported resource entries from settings.yaml."""
+    global _supported_resource_entries
+    if _supported_resource_entries is None:
+        path = _CONFIG_DIR / "settings.yaml"
+        with open(path, "r", encoding="utf-8") as f:
+            data = pyyaml.safe_load(f) or {}
+        raw = data.get("supported_resources", [])
+        entries = []
+        for item in raw:
+            if isinstance(item, dict):
+                entries.append(item)
+            else:
+                entries.append({"type": str(item), "display": str(item), "aliases": []})
+        _supported_resource_entries = entries
+    return _supported_resource_entries
+
+
+def _resolve_resource_type(requested: str) -> str:
+    """Resolve a resource type or alias to the configured canonical type."""
+    value = requested.strip().lower()
+    for entry in _load_supported_resource_entries():
+        rtype = str(entry.get("type", "")).lower()
+        aliases = [str(a).lower() for a in entry.get("aliases", [])]
+        if value == rtype or value in aliases:
+            return rtype
+    return value
+
+
+def _approval_key(resource_type: str, validation_type: str = "data_owner_approval") -> str:
+    """Session field key used to remember a passed pre-validation."""
+    return f"__pre_validation:{validation_type}:{resource_type}"
+
+
+def _required_pre_validations(config: dict | None) -> list[dict]:
+    """Return required pre-validation entries from a resource config."""
+    if not config:
+        return []
+    return [
+        check for check in config.get("pre_validations", [])
+        if check.get("required", True)
+    ]
+
+
 def _normalize_initial_field(field_name: str, value: Any, config: dict) -> Any:
     """Normalize an initial_field value using config normalize map + options."""
     if value is None:
@@ -141,6 +186,25 @@ def _validate_initial_field(field_name: str, value: Any, config: dict) -> bool:
     return True
 
 
+async def _validate_initial_field_external(field_name: str, value: Any) -> tuple[bool, str | None, dict | None]:
+    """Run external/pre-store validation for initial_fields that need it."""
+    if field_name != "intake_id":
+        return True, None, None
+
+    from tools.intake_tools import check_intake_id
+
+    check_result = await check_intake_id(intake_id=str(value))
+    try:
+        check_data = json.loads(check_result)
+    except json.JSONDecodeError:
+        return False, "Could not validate intake ID. Please try again.", None
+
+    if not check_data.get("valid"):
+        return False, check_data.get("message", "Intake ID is not approved."), check_data
+
+    return True, None, check_data
+
+
 def bind_session(session: Session):
     """Bind the active session for tools to operate on (async-safe per-task)."""
     _session_var.set(session)
@@ -165,19 +229,39 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
 
     session = _get_session()
     supported = _load_supported_resources()
+    session_fields = await load_session_fields(session.session_id)
     created = []
     errors = []
+    blocked = []
 
     for spec in resources:
-        rtype = spec.get("resource_type", "").strip().lower()
-        if not rtype:
+        requested_type = spec.get("resource_type", "").strip().lower()
+        if not requested_type:
             continue
+        rtype = _resolve_resource_type(requested_type)
 
         # Scope control: reject unsupported resource types
         if rtype not in supported:
             errors.append({
-                "resource_type": rtype,
+                "resource_type": requested_type,
                 "error": f"'{rtype}' is not supported yet. Currently available: {', '.join(supported)}",
+            })
+            continue
+
+        config = _load_resource_config(rtype)
+        missing_pre_validations = []
+        for check in _required_pre_validations(config):
+            check_type = check.get("type")
+            if check_type == "data_owner_approval":
+                if session_fields.get(_approval_key(rtype, check_type)) != "true":
+                    missing_pre_validations.append(check_type)
+
+        if missing_pre_validations:
+            blocked.append({
+                "resource_type": rtype,
+                "missing_pre_validations": missing_pre_validations,
+                "required_tool": "validate_approval_image",
+                "message": f"{rtype} requires data owner approval before it can be created.",
             })
             continue
 
@@ -187,16 +271,26 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
 
         # 1. Apply initial_fields from user's message (highest priority)
         initial = spec.get("initial_fields") or {}
-        config = _load_resource_config(rtype)
         valid_fields = {fs["name"] for fs in config.get("collect_fields", [])} if config else set()
         applied_initial = {}
+        initial_field_errors = {}
+        initial_validation_details = {}
         for k, v in initial.items():
             if k in valid_fields and v:
                 # Normalize value
                 normalized = _normalize_initial_field(k, v, config)
                 # Validate against options
                 if not _validate_initial_field(k, normalized, config):
-                    continue  # Skip invalid values silently — LLM will re-ask
+                    initial_field_errors[k] = "Invalid value for this field. Use the configured allowed values/format."
+                    continue
+                external_valid, external_error, external_detail = await _validate_initial_field_external(k, normalized)
+                if not external_valid:
+                    initial_field_errors[k] = external_error or "External validation failed"
+                    if external_detail:
+                        initial_validation_details[k] = external_detail
+                    continue
+                if external_detail:
+                    initial_validation_details[k] = external_detail
                 resource.collected_fields[k] = normalized
                 applied_initial[k] = normalized
 
@@ -220,6 +314,10 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
         }
         if applied_initial:
             entry["initial_fields_set"] = applied_initial
+        if initial_field_errors:
+            entry["initial_field_errors"] = initial_field_errors
+        if initial_validation_details:
+            entry["validation_details"] = initial_validation_details
         if prefilled:
             entry["prefilled_fields"] = prefilled
         if auto_derived:
@@ -229,6 +327,9 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
     result: dict[str, Any] = {"created": created}
     if errors:
         result["errors"] = errors
+    if blocked:
+        result["blocked_by_pre_validation"] = blocked
+        result["next_action"] = "Call validate_approval_image for the blocked resource_types, then retry create_resources for those resources. Continue normally with any created resources."
     return json.dumps(result)
 
 

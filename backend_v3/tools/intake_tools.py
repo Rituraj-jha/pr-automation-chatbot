@@ -61,7 +61,22 @@ async def validate_approval_image(resource_types: list[str], **kwargs) -> str:
     Returns:
         {valid: true, approved_for: [...], message: "..."}
     """
-    # MOCK: Always passes
+    # MOCK: Always passes. Persist result so create_resources can proceed on retry.
+    try:
+        from tools.session_tools import _get_session, _approval_key
+        from db.repository import save_session_field
+
+        session = _get_session()
+        for resource_type in resource_types:
+            await save_session_field(
+                session.session_id,
+                _approval_key(resource_type, "data_owner_approval"),
+                "true",
+            )
+    except RuntimeError:
+        # Tool can still be unit-tested without a bound session.
+        pass
+
     return json.dumps({
         "valid": True,
         "approved_for": resource_types,
