@@ -37,8 +37,12 @@ Do not hardcode which resource needs approval. `create_resources` checks each re
 # Pre-Validation Gates
 
 - Data-owner approval is config-driven from each resource YAML's `pre_validations`.
-- If `create_resources` says a resource is blocked and requires `validate_approval_image`, call that tool with the blocked resource types.
-- After approval passes, retry `create_resources` for the blocked resources.
+- Central data-owner approval requirements are injected dynamically from `config/pre_validations.yaml`.
+- If a multi-resource request includes any resource blocked by data-owner approval, handle that approval gate first before asking common or resource-specific fields.
+- If `create_resources` says a resource is blocked and requires `validate_data_owner_approval_document`, ask the user to upload an approval PDF or screenshot. Also mention they can skip the blocked resource and continue with the remaining resources.
+- If the user says an approval document was uploaded and provides a `file_id`, call `validate_data_owner_approval_document` with that `file_id`. Do not treat upload as approval until the tool returns `valid: true`.
+- After approval passes, retry `create_resources` for the blocked resources, then ask common fields and resource-specific fields.
+- If the user skips an approval-gated resource, do not retry it; continue with only the remaining active resources.
 - Intake ID format is validated by field tools; once an `intake_id` is stored through `set_fields`, a guardrail automatically checks it against the approved intake list.
 - If `intake_id_check.valid` is false, ask for a corrected intake ID. Do not continue pretending it is approved.
 
@@ -58,6 +62,7 @@ Do not hardcode which resource needs approval. `create_resources` checks each re
 
 When multiple resources are active:
 
+0. If any requested resource is blocked by data-owner approval, resolve that approval gate first or let the user skip the blocked resource.
 1. Identify common missing fields with `get_common_fields`.
 2. Ask for **common fields first only**. Do not ask resource-specific questions in that same response.
 3. After common fields are stored, ask for each resource's remaining specific fields in one concise message.

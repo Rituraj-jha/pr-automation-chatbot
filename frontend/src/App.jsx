@@ -353,6 +353,156 @@ function ResourcePanel({ resources, onCopyYaml }) {
 	)
 }
 
+function shouldShowDataOwnerApprovalUpload(messageText) {
+	const text = String(messageText || "").toLowerCase()
+	const alreadyResolved = text.includes("approval validated")
+		|| text.includes("approval verified")
+		|| text.includes("data owner approval validated")
+		|| text.includes("data-owner approval validated")
+		|| text.includes("data owner approval verified")
+		|| text.includes("data-owner approval verified")
+		|| text.includes("created (")
+		|| text.includes("created glue")
+	if (alreadyResolved) return false
+
+	const mentionsApproval = text.includes("data-owner approval")
+		|| text.includes("data owner approval")
+		|| text.includes("approval")
+	const requestsEvidence = text.includes("upload")
+		|| text.includes("pdf")
+		|| text.includes("screenshot")
+		|| text.includes("file_id")
+		|| text.includes("requires")
+		|| text.includes("needs")
+		|| text.includes("before i can")
+		|| text.includes("before creation")
+	return mentionsApproval && requestsEvidence
+}
+
+function inferDataOwnerApprovalResourceTypes(messageText, approvalRequirements = {}) {
+	const text = String(messageText || "").toLowerCase()
+	const configured = Array.isArray(approvalRequirements.resources) ? approvalRequirements.resources : []
+	const matched = configured.filter((resourceType) => {
+		const value = String(resourceType || "").toLowerCase()
+		if (!value) return false
+		if (text.includes(value)) return true
+		if (value === "glue_db" && (text.includes("glue db") || text.includes("glue database") || text.includes("gluedb"))) return true
+		return false
+	})
+	if (matched.length > 0) return matched
+	if (configured.length === 1 && shouldShowDataOwnerApprovalUpload(text)) return configured
+	return []
+}
+
+function fileToBase64(file) {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader()
+		reader.onload = () => {
+			const result = String(reader.result || "")
+			resolve(result.includes(",") ? result.split(",").pop() : result)
+		}
+		reader.onerror = () => reject(reader.error || new Error("Could not read file"))
+		reader.readAsDataURL(file)
+	})
+}
+
+function DataOwnerApprovalUploadCard({ messageText, approvalRequirements, resourceTypesOverride, currentChatId, intakeId, onUpload, onSend }) {
+	const [file, setFile] = useState(null)
+	const [status, setStatus] = useState(null)
+	const [error, setError] = useState("")
+	const [uploading, setUploading] = useState(false)
+
+	const overrideResourceTypes = Array.isArray(resourceTypesOverride)
+		? resourceTypesOverride.filter(Boolean)
+		: []
+	if (!overrideResourceTypes.length && !shouldShowDataOwnerApprovalUpload(messageText)) return null
+
+	const resourceTypes = overrideResourceTypes.length
+		? overrideResourceTypes
+		: inferDataOwnerApprovalResourceTypes(messageText, approvalRequirements)
+	if (!resourceTypes.length) return null
+
+	const acceptedTypes = Array.isArray(approvalRequirements?.accepted_file_types)
+		? approvalRequirements.accepted_file_types
+		: ["image/png", "image/jpeg", "image/jpg", "application/pdf"]
+	const acceptAttr = acceptedTypes.join(",")
+	const resourceLabel = resourceTypes.map((resourceType) => resourceType.replace(/_/g, " ").toUpperCase()).join(", ")
+
+	const handleUpload = async () => {
+		if (!file || uploading) return
+		if (acceptedTypes.length && !acceptedTypes.includes(file.type)) {
+			setError(`Unsupported file type: ${file.type || "unknown"}. Upload PDF, PNG, or JPG.`)
+			return
+		}
+
+		try {
+			setError("")
+			setStatus(null)
+			setUploading(true)
+			const fileContentBase64 = await fileToBase64(file)
+			const result = await onUpload({
+				resource_types: resourceTypes,
+				session_id: currentChatId,
+				intake_id: intakeId || null,
+				file_name: file.name,
+				file_type: file.type,
+				file_content_base64: fileContentBase64,
+			})
+			setStatus(result)
+			await onSend?.(
+				`I uploaded a data owner approval document for ${resourceTypes.join(", ")}. `
+				+ `file_id: ${result.file_id}. file_name: ${result.file_name}. `
+				+ `Please validate it and continue.`
+			)
+		} catch (uploadError) {
+			setError(uploadError.message || "Approval upload failed")
+		} finally {
+			setUploading(false)
+		}
+	}
+
+	const handleSkip = () => {
+		onSend?.(`Skip ${resourceTypes.join(", ")} from this request and continue with the remaining resources.`)
+	}
+
+	return (
+		<div className="sc-card approval-upload-card">
+			<div className="sc-header">
+				<span className="sc-icon">📎</span>
+				<span>Upload Data Owner Approval</span>
+				<span className="sc-badge sc-badge-confirming">{resourceLabel}</span>
+			</div>
+			<div className="approval-upload-body">
+				<p>Upload the approval PDF or screenshot. The agent will validate it before continuing. If you do not have it now, skip this resource and continue with the rest.</p>
+				<label className={`approval-dropzone ${file ? "has-file" : ""}`}>
+					<input
+						type="file"
+						accept={acceptAttr}
+						onChange={(event) => {
+							setFile(event.target.files?.[0] || null)
+							setStatus(null)
+							setError("")
+						}}
+						disabled={uploading || status?.uploaded}
+					/>
+					<span className="approval-dropzone-title">{file ? file.name : "Choose PDF, PNG, or JPG"}</span>
+					<span className="approval-dropzone-subtitle">Accepted: {acceptedTypes.join(", ")}</span>
+				</label>
+				{error && <div className="approval-upload-result approval-error">{error}</div>}
+				{status?.uploaded && <div className="approval-upload-result approval-success">✓ Uploaded. Asking the agent to validate this document.</div>}
+			</div>
+			<div className="sc-actions">
+				<button type="button" className="sc-btn-confirm" onClick={handleUpload} disabled={!file || uploading || status?.uploaded}>
+					{uploading ? "Uploading..." : "Upload for Agent Validation"}
+				</button>
+				<button type="button" className="sc-btn-cancel" onClick={handleSkip} disabled={uploading}>
+					Skip {resourceLabel}
+				</button>
+			</div>
+		</div>
+	)
+}
+
 // ─── Starter Cards ──────────────────────────────────────────────────────────
 
 const STARTER_CARDS = [
@@ -434,9 +584,18 @@ function inferResourceChoiceOptions(messageText, existingOptions, supportedResou
 	}
 
 	const text = String(messageText || "").toLowerCase()
+	const mentionsS3 = text.includes("s3") || text.includes("s3 bucket")
+	const mentionsGlue = text.includes("glue_db")
+		|| text.includes("glue db")
+		|| text.includes("glue database")
+		|| text.includes("gluedb")
 	const asksResourceChoice =
 		text.includes("which resource would you like to create")
-		|| (text.includes("s3") && (text.includes("glue db") || text.includes("glue database")) && text.includes("which"))
+		|| text.includes("what would you like to create")
+		|| text.includes("which one would you like")
+		|| text.includes("reply with \"s3\"")
+		|| text.includes("reply with s3")
+		|| (mentionsS3 && mentionsGlue && (text.includes("which") || text.includes("what") || text.includes(" or ")))
 
 	if (!asksResourceChoice) {
 		return { options: null, options_multi_select: false }
@@ -468,17 +627,30 @@ function inferResourceChoiceOptions(messageText, existingOptions, supportedResou
 	}
 }
 
-function MessageBubble({ message, isLatest, onOptionClick }) {
+function MessageBubble({ message, isLatest, onOptionClick, approvalRequirements, currentChatId, intakeId, onValidateApprovalUpload }) {
 	const [selected, setSelected] = useState(new Set())
 	const [isAssistantCollapsed, setIsAssistantCollapsed] = useState(false)
 
 	const structuredType = message?.structured?.type
+	const approvalResourceTypes = structuredType === "approval_required" && Array.isArray(message.structured?.resource_types)
+		? message.structured.resource_types
+		: inferDataOwnerApprovalResourceTypes(message.content, approvalRequirements)
+	const hasApprovalUploadUI = Boolean(
+		message.role === "assistant"
+		&& isLatest
+		&& (
+			structuredType === "approval_required"
+			|| shouldShowDataOwnerApprovalUpload(message.content)
+		)
+		&& approvalResourceTypes.length > 0
+	)
 	const hasStructuredHelperUI = structuredType === "field_prompts" || structuredType === "yaml_preview"
 	const hasHelperUI = Boolean(
 		message.role === "assistant"
 		&& isLatest
 		&& (
 			hasStructuredHelperUI
+			|| hasApprovalUploadUI
 			|| (Array.isArray(message.options) && message.options.length > 0)
 		)
 	)
@@ -555,6 +727,18 @@ function MessageBubble({ message, isLatest, onOptionClick }) {
 				</>
 			)}
 
+			{message.role === "assistant" && isLatest && hasApprovalUploadUI && (
+				<DataOwnerApprovalUploadCard
+					messageText={message.content}
+					approvalRequirements={approvalRequirements}
+					resourceTypesOverride={approvalResourceTypes}
+					currentChatId={currentChatId}
+					intakeId={intakeId}
+					onUpload={onValidateApprovalUpload}
+					onSend={onOptionClick}
+				/>
+			)}
+
 			{/* Resource panel — on latest assistant message when resources exist */}
 			{message.role === "assistant" && isLatest && message.resources_summary && message.resources_summary.length > 0 && (
 				<ResourcePanel resources={message.resources_summary} onCopyYaml={handleCopyYaml} />
@@ -610,6 +794,7 @@ export default function App() {
 	const [validatingIntake, setValidatingIntake] = useState(false)
 	const [pendingAutoMessage, setPendingAutoMessage] = useState("")
 	const [supportedResources, setSupportedResources] = useState([])
+	const [approvalRequirements, setApprovalRequirements] = useState({})
 	const textareaRef = useRef(null)
 	const threadEndRef = useRef(null)
 	const intakeGateRef = useRef(null)
@@ -677,8 +862,26 @@ export default function App() {
 
 		const payload = await api(`/api/chats/${chatId}/messages`, {}, userOverride)
 		const nextMessages = mapMessages(payload || [])
+		let restoredIntake = null
+		try {
+			const intakePayload = await api(`/api/chats/${chatId}/intake`, {}, userOverride)
+			if (intakePayload?.validated) {
+				restoredIntake = {
+					valid: Boolean(intakePayload.valid ?? true),
+					can_start_chat: Boolean(intakePayload.can_start_chat ?? true),
+					status: intakePayload.status || "approved_and_ready_for_design",
+					intake_id: intakePayload.intake_id,
+					message: intakePayload.message || `Intake ID '${intakePayload.intake_id}' is already validated for this session.`,
+					restored: true,
+				}
+			}
+		} catch {
+			restoredIntake = null
+		}
 		setCurrentChatId(String(chatId))
 		setMessages(nextMessages)
+		setIntakeValidation(restoredIntake)
+		setIntakeId("")
 		setShowTemplates(nextMessages.length === 0)
 		setErrorText("")
 	}, [api, mapMessages])
@@ -712,6 +915,15 @@ export default function App() {
 		}
 	}, [api])
 
+	const loadApprovalRequirements = useCallback(async (userOverride = null) => {
+		try {
+			const payload = await api("/api/data-owner-approval/requirements", {}, userOverride)
+			setApprovalRequirements(payload || {})
+		} catch {
+			setApprovalRequirements({})
+		}
+	}, [api])
+
 	useEffect(() => {
 		const init = async () => {
 			try {
@@ -724,6 +936,7 @@ export default function App() {
 					setIsAuthenticated(true)
 					window.history.replaceState({}, "", "/")
 					await loadSupportedResources(user)
+					await loadApprovalRequirements(user)
 					await loadChats(user)
 					return
 				}
@@ -746,6 +959,7 @@ export default function App() {
 				setGithubUser(savedUser)
 				setIsAuthenticated(true)
 				await loadSupportedResources(savedUser)
+				await loadApprovalRequirements(savedUser)
 				await loadChats(savedUser)
 			} catch {
 				localStorage.removeItem("github_user")
@@ -755,7 +969,7 @@ export default function App() {
 		}
 
 		init()
-	}, [api, loadChats, loadSupportedResources])
+	}, [api, loadChats, loadSupportedResources, loadApprovalRequirements])
 
 	const startNewChat = useCallback(async () => {
 		try {
@@ -817,6 +1031,13 @@ export default function App() {
 		setValidatingIntake(false)
 	}, [])
 
+	const uploadApprovalDocument = useCallback(async (payload) => {
+		return api("/api/data-owner-approval/upload", {
+			method: "POST",
+			body: JSON.stringify(payload),
+		})
+	}, [api])
+
 	const useStarterPrompt = useCallback(async (prompt) => {
 		if (!intakeApproved) {
 			setErrorText("Validate an Intake ID with status 'approved_and_ready_for_design' before starting chat.")
@@ -838,9 +1059,18 @@ export default function App() {
 		try {
 			setErrorText("")
 			setValidatingIntake(true)
+			let workingChatId = currentChatId
+			if (!workingChatId) {
+				const chat = await api("/api/chats", { method: "POST" })
+				workingChatId = String(chat.id)
+				setChats((current) => [chat, ...current])
+				setCurrentChatId(workingChatId)
+				setMessages([])
+				setShowTemplates(true)
+			}
 			const payload = await api("/api/intake/validate", {
 				method: "POST",
-				body: JSON.stringify({ intake_id: value }),
+				body: JSON.stringify({ intake_id: value, session_id: workingChatId }),
 			})
 			setIntakeValidation(payload)
 
@@ -869,7 +1099,7 @@ export default function App() {
 		} finally {
 			setValidatingIntake(false)
 		}
-	}, [api, intakeId, validatingIntake])
+	}, [api, currentChatId, intakeId, validatingIntake])
 
 	const updateComposerHeight = useCallback((value) => {
 		setDraft(value)
@@ -1152,6 +1382,10 @@ export default function App() {
 										message={message}
 										isLatest={index === messages.length - 1 && !sending}
 										onOptionClick={sendMessage}
+										approvalRequirements={approvalRequirements}
+										currentChatId={currentChatId}
+										intakeId={intakeValidation?.intake_id}
+										onValidateApprovalUpload={uploadApprovalDocument}
 									/>
 								))
 							)}

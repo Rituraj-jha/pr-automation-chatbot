@@ -12,7 +12,7 @@ from tools.derive_tools import derive_fields
 from tools.generate_tools import generate_yaml
 from tools.validate_tools import validate_fields
 from tools.reviewer_tools import review_yaml
-from tools.intake_tools import check_intake_id, validate_approval_image
+from tools.intake_tools import check_intake_id, validate_approval_image, validate_data_owner_approval_document
 from tools.preference_tools import update_user_profile
 from tools.pr_tools import create_pr
 
@@ -32,6 +32,7 @@ TOOL_FUNCTIONS: dict[str, Callable] = {
     "validate_fields": validate_fields,
     "review_yaml": review_yaml,
     "check_intake_id": check_intake_id,
+    "validate_data_owner_approval_document": validate_data_owner_approval_document,
     "validate_approval_image": validate_approval_image,
     "update_user_profile": update_user_profile,
     "create_pr": create_pr,
@@ -290,8 +291,50 @@ TOOL_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
+            "name": "validate_data_owner_approval_document",
+            "description": "Mock-validate uploaded data owner approval evidence for resources that require it. Accepts frontend-provided PDF/image metadata or content. Call this when create_resources returns blocked_by_pre_validation with required_tool validate_data_owner_approval_document.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "resource_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Blocked resource types that require approval, e.g. ['glue_db']",
+                    },
+                    "file_id": {
+                        "type": "string",
+                        "description": "Backend file_id returned by /api/data-owner-approval/upload. Prefer this over raw file content.",
+                    },
+                    "file_name": {
+                        "type": "string",
+                        "description": "Uploaded file name from frontend, e.g. approval.pdf or screenshot.png",
+                    },
+                    "file_type": {
+                        "type": "string",
+                        "description": "MIME type from frontend, e.g. application/pdf or image/png",
+                    },
+                    "file_content_base64": {
+                        "type": "string",
+                        "description": "Optional base64 file content. For now this is accepted but not analyzed.",
+                    },
+                    "file_url": {
+                        "type": "string",
+                        "description": "Optional uploaded-file URL or backend file reference.",
+                    },
+                    "intake_id": {
+                        "type": "string",
+                        "description": "Optional intake ID to associate with approval validation.",
+                    },
+                },
+                "required": ["resource_types"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "validate_approval_image",
-            "description": "Validate data owner approval for resources that require it (e.g. glue_db). Call this BEFORE creating resources that have pre_validations: [data_owner_approval] in their config. For now, pass the resource_types that need approval.",
+            "description": "Legacy alias for validate_data_owner_approval_document. Prefer validate_data_owner_approval_document for new flows.",
             "parameters": {
                 "type": "object",
                 "properties": {

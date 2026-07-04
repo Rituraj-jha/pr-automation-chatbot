@@ -44,6 +44,32 @@ def _build_supported_resources_section() -> str:
     return "\n".join(lines)
 
 
+def _build_pre_validation_section() -> str:
+    """Build pre-validation context from config/pre_validations.yaml."""
+    path = _CONFIG_DIR / "pre_validations.yaml"
+    if not path.exists():
+        return "\n\n# Pre-Validation Requirements\nNo central pre-validation config found."
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    approval = data.get("data_owner_approval", {}) or {}
+    if not approval.get("enabled", True):
+        return "\n\n# Pre-Validation Requirements\nData owner approval validation is disabled."
+
+    resources = ", ".join(approval.get("resources", [])) or "none"
+    file_types = ", ".join(approval.get("accepted_file_types", [])) or "not configured"
+    tool = approval.get("validator_tool", "validate_data_owner_approval_document")
+    description = approval.get("description", "Upload data owner approval evidence.")
+
+    return "\n".join([
+        "\n\n# Pre-Validation Requirements (dynamic from config/pre_validations.yaml)",
+        f"- Data owner approval resources: {resources}",
+        f"- Required tool: `{tool}`",
+        f"- Accepted file types: {file_types}",
+        f"- User instruction: {description}",
+        "If `create_resources` blocks a resource for data_owner_approval, ask for an approval PDF or screenshot before retrying that resource.",
+    ])
+
+
 def build_system_prompt(session: Session, user_profile: str | None) -> str:
     """
     Build the full system prompt by combining:
@@ -71,7 +97,10 @@ def build_system_prompt(session: Session, user_profile: str | None) -> str:
     # 3. Supported resources from settings.yaml
     resource_hint = _build_supported_resources_section()
 
-    return system_md + profile_section + resource_hint
+    # 4. Pre-validation requirements from pre_validations.yaml
+    pre_validation_hint = _build_pre_validation_section()
+
+    return system_md + profile_section + resource_hint + pre_validation_hint
 
 
 def build_conversation_messages(session: Session) -> list[dict]:

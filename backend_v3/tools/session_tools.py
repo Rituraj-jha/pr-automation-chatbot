@@ -9,7 +9,7 @@ from typing import Any
 import yaml as pyyaml
 
 from models.state import Session, Resource, ResourceStatus
-from db.repository import save_resource, load_session_fields
+from db.repository import save_resource, load_session_fields, save_session_field
 
 # Per-task session context — safe under concurrent async requests
 _session_var: ContextVar[Session | None] = ContextVar("_session_var", default=None)
@@ -17,6 +17,7 @@ _session_var: ContextVar[Session | None] = ContextVar("_session_var", default=No
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 _supported_resources: list[str] | None = None
 _supported_resource_entries: list[dict] | None = None
+_pre_validation_config: dict | None = None
 
 
 def _load_resource_config(resource_type: str) -> dict | None:
@@ -129,14 +130,53 @@ def _approval_key(resource_type: str, validation_type: str = "data_owner_approva
     return f"__pre_validation:{validation_type}:{resource_type}"
 
 
-def _required_pre_validations(config: dict | None) -> list[dict]:
-    """Return required pre-validation entries from a resource config."""
+def _pending_approval_key(validation_type: str = "data_owner_approval") -> str:
+    """Session field key used to remember blocked resources awaiting approval."""
+    return f"__pending_pre_validation:{validation_type}"
+
+
+def _load_pre_validation_config() -> dict:
+    """Load central pre-validation config."""
+    global _pre_validation_config
+    if _pre_validation_config is None:
+        path = _CONFIG_DIR / "pre_validations.yaml"
+        if not path.exists():
+            _pre_validation_config = {}
+        else:
+            with open(path, "r", encoding="utf-8") as f:
+                _pre_validation_config = pyyaml.safe_load(f) or {}
+    return _pre_validation_config
+
+
+def _required_pre_validations(resource_type: str, config: dict | None) -> list[dict]:
+    """Return required pre-validation entries from resource + central config."""
+    checks = []
     if not config:
-        return []
-    return [
-        check for check in config.get("pre_validations", [])
+        config = {}
+    checks.extend([
+        dict(check) for check in config.get("pre_validations", [])
         if check.get("required", True)
-    ]
+    ])
+
+    central = _load_pre_validation_config().get("data_owner_approval", {}) or {}
+    central_resources = {str(r).strip().lower() for r in central.get("resources", [])}
+    has_data_owner_check = False
+    for check in checks:
+        if check.get("type") == "data_owner_approval":
+            has_data_owner_check = True
+            check.setdefault("validator_tool", central.get("validator_tool", "validate_data_owner_approval_document"))
+            check.setdefault("accepted_file_types", central.get("accepted_file_types", []))
+            check.setdefault("description", central.get("description", "Upload data owner approval evidence."))
+    if central.get("enabled", True) and resource_type in central_resources and not has_data_owner_check:
+        checks.append({
+            "type": "data_owner_approval",
+            "required": True,
+            "description": central.get("description", "Upload data owner approval evidence."),
+            "validator_tool": central.get("validator_tool", "validate_data_owner_approval_document"),
+            "accepted_file_types": central.get("accepted_file_types", []),
+        })
+
+    return checks
 
 
 def _normalize_initial_field(field_name: str, value: Any, config: dict) -> Any:
@@ -256,17 +296,20 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
 
         config = _load_resource_config(rtype)
         missing_pre_validations = []
-        for check in _required_pre_validations(config):
+        validation_details = []
+        for check in _required_pre_validations(rtype, config):
             check_type = check.get("type")
             if check_type == "data_owner_approval":
                 if session_fields.get(_approval_key(rtype, check_type)) != "true":
                     missing_pre_validations.append(check_type)
+                    validation_details.append(check)
 
         if missing_pre_validations:
             blocked.append({
                 "resource_type": rtype,
                 "missing_pre_validations": missing_pre_validations,
-                "required_tool": "validate_approval_image",
+                "required_tool": "validate_data_owner_approval_document",
+                "validation_details": validation_details,
                 "message": f"{rtype} requires data owner approval before it can be created.",
             })
             continue
@@ -335,7 +378,17 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
         result["errors"] = errors
     if blocked:
         result["blocked_by_pre_validation"] = blocked
-        result["next_action"] = "Call validate_approval_image for the blocked resource_types, then retry create_resources for those resources. Continue normally with any created resources."
+        result["next_action"] = "Ask the user to upload data owner approval evidence, call validate_data_owner_approval_document for the blocked resource_types, then retry create_resources for those resources. Continue normally with any created resources."
+        pending_resource_types = sorted({item["resource_type"] for item in blocked})
+        await save_session_field(
+            session.session_id,
+            _pending_approval_key("data_owner_approval"),
+            json.dumps({
+                "validation_type": "data_owner_approval",
+                "resource_types": pending_resource_types,
+                "blocked": blocked,
+            }),
+        )
     return json.dumps(result)
 
 

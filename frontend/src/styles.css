@@ -678,3 +678,78 @@
 	font-style: italic;
 }
 
+/* ── Data Owner Approval Upload ───────────────────────────── */
+.approval-upload-card {
+	border-left: 4px solid #d97706;
+}
+
+.approval-upload-body {
+	padding: 14px 16px 2px;
+	display: grid;
+	gap: 12px;
+}
+
+.approval-upload-body p {
+	font-size: 13px;
+	color: var(--mw-muted);
+	margin: 0;
+}
+
+.approval-dropzone {
+	display: grid;
+	place-items: center;
+	gap: 5px;
+	min-height: 112px;
+	padding: 18px;
+	border: 2px dashed var(--mw-border);
+	border-radius: 12px;
+	background: rgba(0, 132, 61, 0.04);
+	cursor: pointer;
+	text-align: center;
+	transition: border-color 0.15s, background 0.15s;
+}
+
+.approval-dropzone:hover {
+	border-color: var(--mw-primary);
+	background: rgba(0, 132, 61, 0.07);
+}
+
+.approval-dropzone.has-file {
+	border-color: var(--mw-primary);
+	background: rgba(0, 132, 61, 0.08);
+}
+
+.approval-dropzone input {
+	display: none;
+}
+
+.approval-dropzone-title {
+	font-size: 14px;
+	font-weight: 700;
+	color: var(--mw-text);
+}
+
+.approval-dropzone-subtitle {
+	font-size: 11px;
+	color: var(--mw-muted);
+}
+
+.approval-upload-result {
+	padding: 9px 10px;
+	border-radius: 8px;
+	font-size: 12px;
+	line-height: 1.4;
+}
+
+.approval-success {
+	background: rgba(0, 132, 61, 0.08);
+	border: 1px solid rgba(0, 132, 61, 0.25);
+	color: var(--mw-primary);
+}
+
+.approval-error {
+	background: rgba(180, 35, 24, 0.08);
+	border: 1px solid rgba(180, 35, 24, 0.25);
+	color: var(--mw-danger);
+}
+

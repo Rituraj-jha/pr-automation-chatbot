@@ -4,6 +4,7 @@ Connects the agent to the frontend.
 """
 from __future__ import annotations
 
+import base64
 import sys
 import json
 import uuid
@@ -24,12 +25,16 @@ from models.state import Session, ResourceStatus
 from db.connection import set_db_path, init_db, close_db
 from db.repository import (
     save_session, load_session, list_sessions, delete_session,
-    update_session_title, get_session_messages,
+    update_session_title, get_session_messages, save_message,
+    save_resource, load_session_fields, save_session_field,
 )
 from tools.session_tools import bind_session
 from agent.loop import run_agent_turn
 
 _CONFIG_DIR = Path(__file__).resolve().parent / "config"
+_APPROVAL_UPLOAD_DIR = Path(__file__).resolve().parent / "uploads" / "data_owner_approval"
+_PENDING_APPROVAL_KEY = "__pending_pre_validation:data_owner_approval"
+_VALIDATED_INTAKE_KEY = "__validated_intake"
 
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
@@ -68,6 +73,113 @@ def _generate_title(message: str) -> str:
     if len(message) > 60:
         clean += "..."
     return clean
+
+
+def _display_resource_type(resource_type: str) -> str:
+    """Human-readable resource type label."""
+    if resource_type == "glue_db":
+        return "Glue DB"
+    if resource_type == "s3":
+        return "S3"
+    return resource_type.replace("_", " ").title()
+
+
+def _mentions_resource_type(message: str, resource_type: str) -> bool:
+    """Check whether a user message mentions a resource type or common alias."""
+    text = message.lower()
+    if resource_type in text:
+        return True
+    if resource_type == "glue_db" and any(token in text for token in ("glue db", "gluedb", "glue database")):
+        return True
+    if resource_type == "s3" and any(token in text for token in ("s3", "bucket", "s3 bucket")):
+        return True
+    return False
+
+
+async def _load_pending_approval(session_id: str) -> dict | None:
+    """Load unresolved data-owner approval pending state from session fields."""
+    session_fields = await load_session_fields(session_id)
+    pending_raw = session_fields.get(_PENDING_APPROVAL_KEY)
+    if not pending_raw:
+        return None
+    try:
+        pending = json.loads(pending_raw)
+    except json.JSONDecodeError:
+        return None
+    resource_types = [str(r).strip().lower() for r in pending.get("resource_types", []) if str(r).strip()]
+    unresolved = [
+        r for r in resource_types
+        if session_fields.get(f"__pre_validation:data_owner_approval:{r}") != "true"
+    ]
+    if not unresolved:
+        await save_session_field(session_id, _PENDING_APPROVAL_KEY, "")
+        return None
+    pending["resource_types"] = unresolved
+    return pending
+
+
+async def _handle_pending_approval_skip(session: Session, message: str) -> str | None:
+    """Deterministically handle user skipping approval-gated resources."""
+    text = message.lower()
+    if not any(token in text for token in ("skip", "remove", "cancel", "drop")):
+        return None
+
+    pending = await _load_pending_approval(session.session_id)
+    if not pending:
+        return None
+
+    pending_types = pending.get("resource_types", [])
+    skip_types = [rtype for rtype in pending_types if _mentions_resource_type(message, rtype)]
+    if not skip_types and any(token in text for token in ("approval", "don't have", "do not have", "no document", "later")):
+        skip_types = pending_types
+    if not skip_types:
+        return None
+
+    skipped_set = set(skip_types)
+    for resource in session.resources:
+        if resource.resource_type in skipped_set and resource.status != ResourceStatus.DROPPED:
+            resource.status = ResourceStatus.DROPPED
+            await save_resource(session.session_id, resource)
+
+    remaining = [rtype for rtype in pending_types if rtype not in skipped_set]
+    if remaining:
+        pending["resource_types"] = remaining
+        pending["blocked"] = [item for item in pending.get("blocked", []) if item.get("resource_type") in remaining]
+        await save_session_field(session.session_id, _PENDING_APPROVAL_KEY, json.dumps(pending))
+    else:
+        await save_session_field(session.session_id, _PENDING_APPROVAL_KEY, "")
+
+    labels = ", ".join(_display_resource_type(rtype) for rtype in skip_types)
+    active_remaining = [r for r in session.resources if r.status != ResourceStatus.DROPPED]
+    if active_remaining:
+        return f"Skipped {labels}. I’ll continue with the remaining resource request."
+    return f"Skipped {labels}. No remaining resources are active in this request."
+
+
+async def _load_validated_intake(session_id: str) -> dict | None:
+    """Load session-scoped validated intake details, if present."""
+    session_fields = await load_session_fields(session_id)
+    raw = session_fields.get(_VALIDATED_INTAKE_KEY)
+    if raw:
+        try:
+            data = json.loads(raw)
+            if data.get("status") == "approved_and_ready_for_design" and data.get("intake_id"):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+    # Backward-compatible fallback if only the plain intake_id session field exists.
+    intake_id = session_fields.get("intake_id")
+    if intake_id:
+        return {
+            "valid": True,
+            "can_start_chat": True,
+            "status": "approved_and_ready_for_design",
+            "intake_id": intake_id,
+            "message": f"Intake ID '{intake_id}' is already validated for this session.",
+            "restored": True,
+        }
+    return None
 
 
 # ─── Auth routes ──────────────────────────────────────────────────────────────
@@ -150,6 +262,14 @@ async def get_supported_resources():
     return {"resources": resources}
 
 
+@app.get("/api/data-owner-approval/requirements")
+async def get_data_owner_approval_requirements():
+    """Return data owner approval requirements from config/pre_validations.yaml."""
+    from tools.intake_tools import data_owner_approval_requirements
+
+    return data_owner_approval_requirements()
+
+
 @app.post("/api/chats")
 async def create_chat(request: Request):
     """Create a new empty chat session."""
@@ -173,6 +293,15 @@ async def get_chat_messages(chat_id: str, request: Request):
     return messages
 
 
+@app.get("/api/chats/{chat_id}/intake")
+async def get_chat_intake(chat_id: str, request: Request):
+    """Return previously validated intake ID for this chat session, if any."""
+    intake = await _load_validated_intake(chat_id)
+    if not intake:
+        return {"validated": False}
+    return {"validated": True, **intake}
+
+
 @app.delete("/api/chats/{chat_id}")
 async def delete_chat(chat_id: str, request: Request):
     """Delete a chat session."""
@@ -189,6 +318,27 @@ class ChatRequest(BaseModel):
 
 class IntakeValidationRequest(BaseModel):
     intake_id: str
+    session_id: str | None = None
+
+
+class DataOwnerApprovalValidationRequest(BaseModel):
+    resource_types: list[str]
+    session_id: str | None = None
+    intake_id: str | None = None
+    file_id: str | None = None
+    file_name: str | None = None
+    file_type: str | None = None
+    file_content_base64: str | None = None
+    file_url: str | None = None
+
+
+class DataOwnerApprovalUploadRequest(BaseModel):
+    resource_types: list[str]
+    session_id: str | None = None
+    intake_id: str | None = None
+    file_name: str
+    file_type: str
+    file_content_base64: str
 
 
 @app.post("/api/intake/validate")
@@ -206,7 +356,110 @@ async def validate_intake_id(body: IntakeValidationRequest):
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Invalid intake validation response")
 
+    if body.session_id and result.get("status") == "approved_and_ready_for_design" and result.get("can_start_chat"):
+        await save_session_field(body.session_id, _VALIDATED_INTAKE_KEY, json.dumps(result))
+        await save_session_field(body.session_id, "intake_id", str(result.get("intake_id", intake_id)).upper())
+
     return result
+
+
+@app.post("/api/data-owner-approval/validate")
+async def validate_data_owner_approval(body: DataOwnerApprovalValidationRequest, request: Request):
+    """Mock frontend-facing data owner approval validation for PDF/images."""
+    if not body.resource_types:
+        raise HTTPException(status_code=400, detail="resource_types cannot be empty")
+
+    if body.session_id:
+        session = await load_session(body.session_id)
+        if session is None:
+            user = _get_user(request)
+            session = Session(session_id=body.session_id, user_id=user)
+            await save_session(session, title="New Chat")
+        bind_session(session)
+
+    from tools.intake_tools import validate_data_owner_approval_document
+
+    raw_result = await validate_data_owner_approval_document(
+        resource_types=body.resource_types,
+        file_id=body.file_id,
+        file_name=body.file_name,
+        file_type=body.file_type,
+        file_content_base64=body.file_content_base64,
+        file_url=body.file_url,
+        intake_id=body.intake_id,
+    )
+    try:
+        result = json.loads(raw_result)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid approval validation response")
+
+    return result
+
+
+@app.post("/api/data-owner-approval/upload")
+async def upload_data_owner_approval(body: DataOwnerApprovalUploadRequest):
+    """Stage a data owner approval file for later agent/tool validation.
+
+    This endpoint intentionally does NOT validate or persist approval. It only
+    stores the file and returns a file_id. The agent must call
+    validate_data_owner_approval_document(file_id=...) to validate it.
+    """
+    from tools.intake_tools import data_owner_approval_requirements
+
+    if not body.resource_types:
+        raise HTTPException(status_code=400, detail="resource_types cannot be empty")
+
+    requirements = data_owner_approval_requirements()
+    accepted_types = requirements.get("accepted_file_types", [])
+    if accepted_types and body.file_type not in accepted_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{body.file_type}'. Accepted: {', '.join(accepted_types)}",
+        )
+
+    try:
+        file_bytes = base64.b64decode(body.file_content_base64, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 file content")
+
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    _APPROVAL_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    file_id = uuid.uuid4().hex
+    suffix = Path(body.file_name).suffix.lower()
+    if suffix not in {".pdf", ".png", ".jpg", ".jpeg"}:
+        suffix = {
+            "application/pdf": ".pdf",
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+        }.get(body.file_type, ".bin")
+
+    stored_path = _APPROVAL_UPLOAD_DIR / f"{file_id}{suffix}"
+    metadata_path = _APPROVAL_UPLOAD_DIR / f"{file_id}.json"
+    stored_path.write_bytes(file_bytes)
+    metadata = {
+        "file_id": file_id,
+        "file_name": body.file_name,
+        "file_type": body.file_type,
+        "stored_file": stored_path.name,
+        "resource_types": body.resource_types,
+        "session_id": body.session_id,
+        "intake_id": body.intake_id,
+        "uploaded_at": datetime.utcnow().isoformat(),
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    return {
+        "uploaded": True,
+        "file_id": file_id,
+        "file_name": body.file_name,
+        "file_type": body.file_type,
+        "resource_types": body.resource_types,
+        "intake_id": body.intake_id,
+        "message": "Approval document uploaded. The agent will validate it next.",
+    }
 
 
 @app.post("/api/chat")
@@ -228,15 +481,24 @@ async def chat(body: ChatRequest, request: Request):
     # Bind session for tools
     bind_session(session)
 
-    # Run agent
-    response = await run_agent_turn(session, message)
+    # Deterministic skip flow for approval-gated resources.
+    skip_response = await _handle_pending_approval_skip(session, message)
+    if skip_response:
+        session.add_message("user", message)
+        await save_message(session.session_id, session.messages[-1])
+        session.add_message("assistant", skip_response)
+        await save_message(session.session_id, session.messages[-1])
+        response = skip_response
+    else:
+        # Run agent
+        response = await run_agent_turn(session, message)
 
     # Update title if this is the first real message
     if len(session.messages) <= 2:
         await update_session_title(session_id, _generate_title(message))
 
     # Build structured response with post-processing
-    structured = _build_structured_data(session)
+    structured = await _build_structured_data(session)
     resources_summary = _build_resources_summary(session)
 
     # Check for generated YAML
@@ -306,7 +568,7 @@ def _build_resources_summary(session: Session) -> list[dict]:
     return summary
 
 
-def _build_structured_data(session: Session) -> dict | None:
+async def _build_structured_data(session: Session) -> dict | None:
     """Post-process session state to build structured data for the frontend.
     
     Returns the most relevant structured payload based on current state:
@@ -315,6 +577,18 @@ def _build_structured_data(session: Session) -> dict | None:
     - None: if no special rendering needed
     """
     active = [r for r in session.resources if r.status != ResourceStatus.DROPPED]
+
+    # If an approval-gated resource is pending, do not show field prompts for
+    # already-created resources yet. The user must upload approval or skip the
+    # gated resource first.
+    pending_approval = await _load_pending_approval(session.session_id)
+    if pending_approval:
+        return {
+            "type": "approval_required",
+            "resource_types": pending_approval.get("resource_types", []),
+            "blocked": pending_approval.get("blocked", []),
+            "message": "Data owner approval is required before continuing field collection.",
+        }
 
     # Show YAML preview only when every active resource is confirming.
     confirming = [r for r in active if r.status == ResourceStatus.CONFIRMING]
