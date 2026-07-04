@@ -9,9 +9,23 @@ TODO: Replace with real API calls.
 from __future__ import annotations
 
 import json
+import re
 
-# MOCK: Hardcoded list of "approved" intake IDs (simulating Power BI lookup)
-APPROVED_INTAKE_IDS = [
+# Intake status values used by API + UI.
+STATUS_VALID = "valid"
+STATUS_NON_VALID = "non_valid"
+STATUS_APPROVED_AND_READY = "approved_and_ready_for_design"
+
+# MOCK: Intake IDs that exist but are still waiting for approval.
+VALID_PENDING_INTAKE_IDS = [
+    "M0002001",
+    "M0002002",
+    "M0002003",
+    "I0000300",
+]
+
+# MOCK: Intake IDs that are approved and ready to start design/chat.
+APPROVED_AND_READY_INTAKE_IDS = [
     "M0000451",
     "M0000485",
     "M0000500",
@@ -26,27 +40,55 @@ APPROVED_INTAKE_IDS = [
 
 
 async def check_intake_id(intake_id: str, **kwargs) -> str:
-    """Check if the given intake ID exists in the approved list.
+    """Check intake ID status for pre-chat and field validation.
 
     Returns:
-      - {valid: true, intake_id: "...", message: "..."} if found
-      - {valid: false, intake_id: "...", message: "..."} if not found
+      - status: approved_and_ready_for_design -> user can proceed to chat/design
+      - status: valid -> intake exists but is waiting for approval
+      - status: non_valid -> invalid format or unknown ID
     """
     intake_id = intake_id.strip().upper()
 
-    if intake_id in APPROVED_INTAKE_IDS:
-        return json.dumps({
-            "valid": True,
-            "intake_id": intake_id,
-            "message": f"Intake ID '{intake_id}' is approved and exists in the system.",
-        })
-    else:
+    if not re.match(r"^[MI]\d+$", intake_id):
         return json.dumps({
             "valid": False,
+            "can_start_chat": False,
+            "status": STATUS_NON_VALID,
             "intake_id": intake_id,
-            "message": f"Intake ID '{intake_id}' was not found in the approved intake list. "
-                       f"Please verify the ID is correct or check with your team.",
+            "message": f"Intake ID '{intake_id}' is not valid. Use format like M0000485 or I0000200.",
         })
+
+    if intake_id in APPROVED_AND_READY_INTAKE_IDS:
+        return json.dumps({
+            "valid": True,
+            "can_start_chat": True,
+            "status": STATUS_APPROVED_AND_READY,
+            "intake_id": intake_id,
+            "message": f"Intake ID '{intake_id}' is approved and ready for design. You can start chatting now.",
+        })
+
+    if intake_id in VALID_PENDING_INTAKE_IDS:
+        return json.dumps({
+            "valid": True,
+            "can_start_chat": False,
+            "status": STATUS_VALID,
+            "intake_id": intake_id,
+            "message": (
+                f"Intake ID '{intake_id}' is valid, but approval is still pending. "
+                "Come back after some time. It's waiting for approval."
+            ),
+        })
+
+    return json.dumps({
+        "valid": False,
+        "can_start_chat": False,
+        "status": STATUS_NON_VALID,
+        "intake_id": intake_id,
+        "message": (
+            f"Intake ID '{intake_id}' was not found in the intake system. "
+            "Please verify the ID is correct or check with your team."
+        ),
+    })
 
 
 async def validate_approval_image(resource_types: list[str], **kwargs) -> str:

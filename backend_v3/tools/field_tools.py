@@ -96,7 +96,13 @@ async def _validate_external_field(field_name: str, value: Any) -> tuple[bool, s
     except json.JSONDecodeError:
         return False, "Could not validate intake ID. Please try again.", None
 
-    if not check_data.get("valid"):
+    status = check_data.get("status")
+    can_start_chat = check_data.get("can_start_chat")
+
+    if status is not None:
+        if status != "approved_and_ready_for_design" or not can_start_chat:
+            return False, check_data.get("message", "Intake ID is not approved."), check_data
+    elif not check_data.get("valid"):
         return False, check_data.get("message", "Intake ID is not approved."), check_data
 
     return True, None, check_data

@@ -5,6 +5,7 @@ Connects the agent to the frontend.
 from __future__ import annotations
 
 import sys
+import json
 import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -124,6 +125,31 @@ async def list_chats(request: Request):
     return {"chats": sessions}
 
 
+@app.get("/api/resources/supported")
+async def get_supported_resources():
+    """Return supported resources from config/settings.yaml for UI recommenders."""
+    settings_path = _CONFIG_DIR / "settings.yaml"
+    if not settings_path.exists():
+        return {"resources": []}
+
+    with open(settings_path, "r", encoding="utf-8") as f:
+        settings = yaml.safe_load(f) or {}
+
+    resources = []
+    for item in settings.get("supported_resources", []):
+        if isinstance(item, dict):
+            resources.append({
+                "type": str(item.get("type", "")).strip(),
+                "display": str(item.get("display", "")).strip() or str(item.get("type", "")).strip(),
+            })
+        else:
+            value = str(item).strip()
+            resources.append({"type": value, "display": value})
+
+    resources = [r for r in resources if r.get("type")]
+    return {"resources": resources}
+
+
 @app.post("/api/chats")
 async def create_chat(request: Request):
     """Create a new empty chat session."""
@@ -159,6 +185,28 @@ async def delete_chat(chat_id: str, request: Request):
 class ChatRequest(BaseModel):
     message: str
     session_id: str
+
+
+class IntakeValidationRequest(BaseModel):
+    intake_id: str
+
+
+@app.post("/api/intake/validate")
+async def validate_intake_id(body: IntakeValidationRequest):
+    """Non-LLM Intake ID validation endpoint for UI-based pre-chat gating."""
+    intake_id = body.intake_id.strip()
+    if not intake_id:
+        raise HTTPException(status_code=400, detail="Intake ID cannot be empty")
+
+    from tools.intake_tools import check_intake_id
+
+    raw_result = await check_intake_id(intake_id=intake_id)
+    try:
+        result = json.loads(raw_result)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid intake validation response")
+
+    return result
 
 
 @app.post("/api/chat")

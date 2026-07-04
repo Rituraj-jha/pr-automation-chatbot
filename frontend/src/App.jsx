@@ -6,22 +6,49 @@ function FieldPromptsCard({ structured, onSend }) {
 	const [selections, setSelections] = useState({})
 	const [inputValues, setInputValues] = useState({})
 	if (!structured || structured.type !== "field_prompts") return null
-	const fields = structured.fields || []
-	if (!fields.length) return null
 
-	const selectOption = (fieldName, value) => {
-		setSelections((prev) => ({ ...prev, [fieldName]: value }))
+	const isResourceSpecific = structured.mode === "resource_specific" && Array.isArray(structured.resources)
+	const resourceGroups = isResourceSpecific
+		? structured.resources
+			.filter((resource) => Array.isArray(resource.fields) && resource.fields.length > 0)
+			.map((resource) => ({
+				resource_id: resource.resource_id,
+				resource_type: resource.resource_type,
+				scope: resource.resource_id || resource.resource_type || "resource",
+				fields: resource.fields,
+			}))
+		: [{
+			resource_id: structured.resource_id || null,
+			resource_type: structured.resource_type || null,
+			scope: "global",
+			fields: structured.fields || [],
+		}]
+
+	const flatFields = resourceGroups.flatMap((group) =>
+		group.fields.map((field) => ({ ...field, _scope: group.scope, _resource_id: group.resource_id }))
+	)
+	if (!flatFields.length) return null
+
+	const fieldKey = (scope, fieldName) => `${scope}::${fieldName}`
+
+	const selectOption = (scope, fieldName, value) => {
+		setSelections((prev) => ({ ...prev, [fieldKey(scope, fieldName)]: value }))
 	}
 
 	const handleSubmitAll = () => {
 		const parts = []
-		for (const field of fields) {
-			const selected = selections[field.field_name]
-			const typed = inputValues[field.field_name]?.trim()
+		for (const field of flatFields) {
+			const key = fieldKey(field._scope, field.field_name)
+			const selected = selections[key]
+			const typed = inputValues[key]?.trim()
 			if (selected) {
-				parts.push(`${field.field_name}: ${selected}`)
+				parts.push(isResourceSpecific && field._resource_id
+					? `${field.field_name}: ${selected} for ${field._resource_id}`
+					: `${field.field_name}: ${selected}`)
 			} else if (typed) {
-				parts.push(`${field.field_name}: ${typed}`)
+				parts.push(isResourceSpecific && field._resource_id
+					? `${field.field_name}: ${typed} for ${field._resource_id}`
+					: `${field.field_name}: ${typed}`)
 			} else if (field.allow_empty) {
 				// skip optional fields that are empty
 			}
@@ -33,66 +60,82 @@ function FieldPromptsCard({ structured, onSend }) {
 		}
 	}
 
-	const filledCount = fields.filter((f) => selections[f.field_name] || inputValues[f.field_name]?.trim()).length
-	const requiredCount = fields.filter((f) => !f.allow_empty).length
-	const filledRequired = fields.filter((f) => !f.allow_empty && (selections[f.field_name] || inputValues[f.field_name]?.trim())).length
+	const filledCount = flatFields.filter((f) => {
+		const key = fieldKey(f._scope, f.field_name)
+		return selections[key] || inputValues[key]?.trim()
+	}).length
+	const requiredCount = flatFields.filter((f) => !f.allow_empty).length
+	const filledRequired = flatFields.filter((f) => {
+		const key = fieldKey(f._scope, f.field_name)
+		return !f.allow_empty && (selections[key] || inputValues[key]?.trim())
+	}).length
 
 	return (
 		<div className="sc-card sc-field-prompts">
 			<div className="sc-header">
 				<span className="sc-icon">📋</span>
 				<span>Fields needed to create requested resource{(structured.total_resources || 1) > 1 ? 's' : ''}</span>
-				<span className="sc-badge sc-badge-collecting">{filledCount}/{fields.length}</span>
+				<span className="sc-badge sc-badge-collecting">{filledCount}/{flatFields.length}</span>
 			</div>
 			<div className="sc-fields-list">
-				{fields.map((field) => {
-					const isSelected = selections[field.field_name]
-					return (
-						<div key={field.field_name} className={`sc-field-row ${isSelected ? "sc-field-done" : ""}`}>
-							<div className="sc-field-info">
-								<span className="sc-field-name">{field.label || field.field_name}</span>
-								{field.allow_empty && <span className="sc-badge sc-badge-optional">optional</span>}
-								{isSelected && <span className="sc-badge sc-badge-done">✓ {isSelected}</span>}
+				{resourceGroups.map((group) => (
+					<div key={group.scope}>
+						{isResourceSpecific && (
+							<div className="sc-group-title">
+								{(group.resource_type || "resource").toUpperCase()} ({group.resource_id || group.scope})
 							</div>
-							{!isSelected && field.description && <div className="sc-field-desc">{field.description}</div>}
-							{!isSelected && field.options && field.options.length > 0 && (
-								<div className="sc-options-group">
-									{field.options.map((opt) => {
-										const val = typeof opt === "string" ? opt : opt.value
-										const label = typeof opt === "string" ? opt : opt.label
-										const desc = typeof opt === "string" ? null : opt.description
-										return (
-											<button
-												key={val}
-												type="button"
-												className="sc-option-btn"
-												onClick={() => selectOption(field.field_name, val)}
-												title={desc || label}
-											>
-												<span className="sc-option-label">{label}</span>
-												{desc && <span className="sc-option-desc">{desc}</span>}
-											</button>
-										)
-									})}
-								</div>
-							)}
-							{!isSelected && !field.options && (
-								<div className="sc-input-row">
-									<input
-										type="text"
-										className="sc-text-input"
-										placeholder={field.placeholder || `Enter ${field.label || field.field_name}...`}
-										value={inputValues[field.field_name] || ""}
-										onChange={(e) => setInputValues((prev) => ({ ...prev, [field.field_name]: e.target.value }))}
-									/>
-									{field.allow_empty && !inputValues[field.field_name]?.trim() && (
-										<button type="button" className="sc-skip-btn" onClick={() => selectOption(field.field_name, "(empty)")}>Skip</button>
+						)}
+						{group.fields.map((field) => {
+							const key = fieldKey(group.scope, field.field_name)
+							const isSelected = selections[key]
+							return (
+								<div key={key} className={`sc-field-row ${isSelected ? "sc-field-done" : ""}`}>
+									<div className="sc-field-info">
+										<span className="sc-field-name">{field.label || field.field_name}</span>
+										{field.allow_empty && <span className="sc-badge sc-badge-optional">optional</span>}
+										{isSelected && <span className="sc-badge sc-badge-done">✓ {isSelected}</span>}
+									</div>
+									{!isSelected && field.description && <div className="sc-field-desc">{field.description}</div>}
+									{!isSelected && field.options && field.options.length > 0 && (
+										<div className="sc-options-group">
+											{field.options.map((opt) => {
+												const val = typeof opt === "string" ? opt : opt.value
+												const label = typeof opt === "string" ? opt : opt.label
+												const desc = typeof opt === "string" ? null : opt.description
+												return (
+													<button
+														key={`${key}::${val}`}
+														type="button"
+														className="sc-option-btn"
+														onClick={() => selectOption(group.scope, field.field_name, val)}
+														title={desc || label}
+													>
+														<span className="sc-option-label">{label}</span>
+														{desc && <span className="sc-option-desc">{desc}</span>}
+													</button>
+												)
+											})}
+										</div>
+									)}
+									{!isSelected && !field.options && (
+										<div className="sc-input-row">
+											<input
+												type="text"
+												className="sc-text-input"
+												placeholder={field.placeholder || `Enter ${field.label || field.field_name}...`}
+												value={inputValues[key] || ""}
+												onChange={(e) => setInputValues((prev) => ({ ...prev, [key]: e.target.value }))}
+											/>
+											{field.allow_empty && !inputValues[key]?.trim() && (
+												<button type="button" className="sc-skip-btn" onClick={() => selectOption(group.scope, field.field_name, "(empty)")}>Skip</button>
+											)}
+										</div>
 									)}
 								</div>
-							)}
-						</div>
-					)
-				})}
+							)
+						})}
+					</div>
+				))}
 			</div>
 			<div className="sc-actions">
 				<button
@@ -101,7 +144,7 @@ function FieldPromptsCard({ structured, onSend }) {
 					onClick={handleSubmitAll}
 					disabled={filledRequired < requiredCount}
 				>
-					Submit All Fields ({filledCount}/{fields.length})
+					Submit All Fields ({filledCount}/{flatFields.length})
 				</button>
 			</div>
 		</div>
@@ -385,8 +428,64 @@ function formatContent(text) {
 	return html
 }
 
+function inferResourceChoiceOptions(messageText, existingOptions, supportedResources = []) {
+	if (Array.isArray(existingOptions) && existingOptions.length > 0) {
+		return { options: existingOptions, options_multi_select: false }
+	}
+
+	const text = String(messageText || "").toLowerCase()
+	const asksResourceChoice =
+		text.includes("which resource would you like to create")
+		|| (text.includes("s3") && (text.includes("glue db") || text.includes("glue database")) && text.includes("which"))
+
+	if (!asksResourceChoice) {
+		return { options: null, options_multi_select: false }
+	}
+
+	const normalizedSupported = Array.isArray(supportedResources)
+		? supportedResources
+			.filter((resource) => resource && resource.type)
+			.map((resource) => ({
+				value: String(resource.type),
+				label: String(resource.display || resource.type),
+				description: `Create a ${String(resource.display || resource.type)}`,
+			}))
+		: []
+
+	if (normalizedSupported.length > 0) {
+		return {
+			options: normalizedSupported,
+			options_multi_select: true,
+		}
+	}
+
+	return {
+		options: [
+			{ value: "s3", label: "S3 Bucket", description: "Create an S3 bucket" },
+			{ value: "glue_db", label: "Glue DB", description: "Create a Glue Database" },
+		],
+		options_multi_select: true,
+	}
+}
+
 function MessageBubble({ message, isLatest, onOptionClick }) {
 	const [selected, setSelected] = useState(new Set())
+	const [isAssistantCollapsed, setIsAssistantCollapsed] = useState(false)
+
+	const structuredType = message?.structured?.type
+	const hasStructuredHelperUI = structuredType === "field_prompts" || structuredType === "yaml_preview"
+	const hasHelperUI = Boolean(
+		message.role === "assistant"
+		&& isLatest
+		&& (
+			hasStructuredHelperUI
+			|| (Array.isArray(message.options) && message.options.length > 0)
+		)
+	)
+
+	useEffect(() => {
+		setIsAssistantCollapsed(hasHelperUI)
+	}, [hasHelperUI, message.id])
 
 	const handleCopyClick = useCallback((event) => {
 		const button = event.target.closest(".copy-btn")
@@ -426,11 +525,27 @@ function MessageBubble({ message, isLatest, onOptionClick }) {
 
 	return (
 		<div className={`msg msg-${message.role}`}>
-			<div className="msg-bubble" onClick={handleCopyClick}>
-				{message.role === "assistant"
-					? <div className="markdown-body" dangerouslySetInnerHTML={{ __html: formatContent(message.content) }} />
-					: message.content}
-			</div>
+			{message.role === "assistant" && hasHelperUI && (
+				<div className="assistant-collapse-wrap">
+					<button
+						type="button"
+						className="assistant-collapse-btn"
+						onClick={() => setIsAssistantCollapsed((current) => !current)}
+					>
+						{isAssistantCollapsed ? "Show assistant message" : "Hide assistant message"}
+					</button>
+				</div>
+			)}
+
+			{(!hasHelperUI || !isAssistantCollapsed) ? (
+				<div className="msg-bubble" onClick={handleCopyClick}>
+					{message.role === "assistant"
+						? <div className="markdown-body" dangerouslySetInnerHTML={{ __html: formatContent(message.content) }} />
+						: message.content}
+				</div>
+			) : (
+				<div className="msg-bubble msg-bubble-collapsed">Assistant message is collapsed while helper UI is shown.</div>
+			)}
 
 			{/* Structured components — only on latest assistant message */}
 			{message.role === "assistant" && isLatest && message.structured && (
@@ -445,7 +560,6 @@ function MessageBubble({ message, isLatest, onOptionClick }) {
 				<ResourcePanel resources={message.resources_summary} onCopyYaml={handleCopyYaml} />
 			)}
 
-			{/* Legacy option buttons */}
 			{message.role === "assistant" && isLatest && Array.isArray(message.options) && message.options.length > 0 && (
 				<div className="options-grid">
 					{message.options.map((option, index) => {
@@ -491,15 +605,23 @@ export default function App() {
 	const [historyMenuId, setHistoryMenuId] = useState(null)
 	const [showTemplates, setShowTemplates] = useState(true)
 	const [sending, setSending] = useState(false)
+	const [intakeId, setIntakeId] = useState("")
+	const [intakeValidation, setIntakeValidation] = useState(null)
+	const [validatingIntake, setValidatingIntake] = useState(false)
+	const [pendingAutoMessage, setPendingAutoMessage] = useState("")
+	const [supportedResources, setSupportedResources] = useState([])
 	const textareaRef = useRef(null)
 	const threadEndRef = useRef(null)
-
+	const intakeGateRef = useRef(null)
+	const intakeInputRef = useRef(null)
 	const hasActiveSession = currentChatId !== null
+	const intakeApproved = intakeValidation?.status === "approved_and_ready_for_design"
 
 	const helperText = useMemo(() => {
+		if (!intakeApproved) return "Validate Intake ID to unlock chat."
 		if (hasActiveSession) return "Session started. Continue your conversation below."
 		return "Choose a MINI starter to begin quickly, or start a new chat from the history panel."
-	}, [hasActiveSession])
+	}, [hasActiveSession, intakeApproved])
 
 	useEffect(() => {
 		threadEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
@@ -581,6 +703,15 @@ export default function App() {
 		return nextChats
 	}, [api, currentChatId, loadChat])
 
+	const loadSupportedResources = useCallback(async (userOverride = null) => {
+		try {
+			const payload = await api("/api/resources/supported", {}, userOverride)
+			setSupportedResources(payload?.resources || [])
+		} catch {
+			setSupportedResources([])
+		}
+	}, [api])
+
 	useEffect(() => {
 		const init = async () => {
 			try {
@@ -592,6 +723,7 @@ export default function App() {
 					setGithubUser(user)
 					setIsAuthenticated(true)
 					window.history.replaceState({}, "", "/")
+					await loadSupportedResources(user)
 					await loadChats(user)
 					return
 				}
@@ -613,6 +745,7 @@ export default function App() {
 
 				setGithubUser(savedUser)
 				setIsAuthenticated(true)
+				await loadSupportedResources(savedUser)
 				await loadChats(savedUser)
 			} catch {
 				localStorage.removeItem("github_user")
@@ -622,7 +755,7 @@ export default function App() {
 		}
 
 		init()
-	}, [api, loadChats])
+	}, [api, loadChats, loadSupportedResources])
 
 	const startNewChat = useCallback(async () => {
 		try {
@@ -632,9 +765,13 @@ export default function App() {
 			setCurrentChatId(String(chat.id))
 			setMessages([])
 			setDraft("")
+			setIntakeValidation(null)
+			setIntakeId("")
+			setPendingAutoMessage("")
 			setShowTemplates(true)
 			setHistoryMenuId(null)
 			if (textareaRef.current) textareaRef.current.style.height = "auto"
+			requestAnimationFrame(() => intakeInputRef.current?.focus())
 		} catch (error) {
 			setErrorText(error.message)
 		}
@@ -675,15 +812,64 @@ export default function App() {
 		setHistoryMenuId(null)
 		setAuthError("")
 		setErrorText("")
+		setIntakeId("")
+		setIntakeValidation(null)
+		setValidatingIntake(false)
 	}, [])
 
 	const useStarterPrompt = useCallback(async (prompt) => {
+		if (!intakeApproved) {
+			setErrorText("Validate an Intake ID with status 'approved_and_ready_for_design' before starting chat.")
+			intakeGateRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+			requestAnimationFrame(() => intakeInputRef.current?.focus())
+			return
+		}
 		if (!currentChatId) {
 			await startNewChat()
 		}
 		setDraft(prompt)
 		requestAnimationFrame(() => textareaRef.current?.focus())
-	}, [currentChatId, startNewChat])
+	}, [currentChatId, startNewChat, intakeApproved])
+
+	const validateIntake = useCallback(async () => {
+		const value = intakeId.trim()
+		if (!value || validatingIntake) return
+
+		try {
+			setErrorText("")
+			setValidatingIntake(true)
+			const payload = await api("/api/intake/validate", {
+				method: "POST",
+				body: JSON.stringify({ intake_id: value }),
+			})
+			setIntakeValidation(payload)
+
+			if (payload?.status === "approved_and_ready_for_design") {
+				const approvedIntakeId = (payload?.intake_id || value).toUpperCase()
+				const intakeLine = `intake_id: ${approvedIntakeId}`
+				setDraft((current) => {
+					const trimmedCurrent = (current || "").trim()
+					if (!trimmedCurrent) return intakeLine
+					if (trimmedCurrent.toUpperCase().includes(approvedIntakeId)) return current
+					return `${current}\n${intakeLine}`
+				})
+				setPendingAutoMessage(intakeLine)
+				setIntakeId("")
+				requestAnimationFrame(() => {
+					if (textareaRef.current) {
+						textareaRef.current.style.height = "auto"
+						textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`
+						textareaRef.current.focus()
+					}
+				})
+			}
+		} catch (error) {
+			setErrorText(error.message)
+			setIntakeValidation(null)
+		} finally {
+			setValidatingIntake(false)
+		}
+	}, [api, intakeId, validatingIntake])
 
 	const updateComposerHeight = useCallback((value) => {
 		setDraft(value)
@@ -694,6 +880,12 @@ export default function App() {
 
 	const sendMessage = useCallback(async (eventOrText) => {
 		if (eventOrText?.preventDefault) eventOrText.preventDefault()
+		if (!intakeApproved) {
+			setErrorText("Validate an Intake ID with status 'approved_and_ready_for_design' before chatting.")
+			intakeGateRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+			requestAnimationFrame(() => intakeInputRef.current?.focus())
+			return
+		}
 		const text = typeof eventOrText === "string" ? eventOrText : draft
 		const trimmed = text.trim()
 		if (!trimmed || sending) return
@@ -725,6 +917,7 @@ export default function App() {
 
 			// Build content: just the message text (YAML shown in resource cards)
 			let content = payload.message
+			const inferredOptions = inferResourceChoiceOptions(content, payload.options || null, supportedResources)
 
 			setMessages((current) => [
 				...current,
@@ -732,8 +925,8 @@ export default function App() {
 					id: `assistant-${Date.now()}`,
 					role: "assistant",
 					content,
-					options: payload.options || null,
-					options_multi_select: Boolean(payload.options_multi_select),
+					options: inferredOptions.options,
+					options_multi_select: Boolean(payload.options_multi_select || inferredOptions.options_multi_select),
 					structured: payload.structured || null,
 					resources_summary: payload.resources_summary || null,
 				},
@@ -760,7 +953,14 @@ export default function App() {
 		} finally {
 			setSending(false)
 		}
-	}, [api, currentChatId, draft, sending])
+	}, [api, currentChatId, draft, sending, intakeApproved, supportedResources])
+
+	useEffect(() => {
+		if (!pendingAutoMessage || sending || !intakeApproved) return
+		const nextMessage = pendingAutoMessage
+		setPendingAutoMessage("")
+		void sendMessage(nextMessage)
+	}, [pendingAutoMessage, sending, intakeApproved, sendMessage])
 
 	if (isLoading) {
 		return (
@@ -883,11 +1083,53 @@ export default function App() {
 							<p>{helperText}</p>
 						</header>
 
+						{!intakeApproved && (
+							<section className="intake-gate" aria-label="Intake validation gate" ref={intakeGateRef}>
+								<div className="intake-gate-title">Intake Validation</div>
+								<div className="intake-gate-row">
+									<input
+										ref={intakeInputRef}
+										type="text"
+										className="intake-gate-input"
+										placeholder="Enter Intake ID (e.g. M0000485)"
+										value={intakeId}
+										onChange={(event) => setIntakeId(event.target.value.toUpperCase())}
+										onKeyDown={(event) => {
+											if (event.key === "Enter") {
+												event.preventDefault()
+												validateIntake()
+											}
+										}}
+										disabled={validatingIntake}
+									/>
+									<button
+										type="button"
+										className="intake-gate-btn"
+										onClick={validateIntake}
+										disabled={validatingIntake || !intakeId.trim()}
+									>
+										{validatingIntake ? "Validating..." : "Validate Intake ID"}
+									</button>
+								</div>
+								{intakeValidation && (
+									<div className={`intake-gate-result status-${intakeValidation.status}`}>
+										<strong>Status:</strong> {intakeValidation.status} — {intakeValidation.message}
+									</div>
+								)}
+								<div className="intake-demo-ids">
+									<span><strong>Demo IDs:</strong></span>
+									<span>approved_and_ready_for_design: M0000485, I0000200</span>
+									<span>valid: M0002001, I0000300</span>
+									<span>non_valid: M0099999, I0099999</span>
+								</div>
+							</section>
+						)}
+
 						{errorText && <div className="error-banner">{errorText}</div>}
 
 						<section className="starter-grid" aria-label="MINI starters">
 							{showTemplates && STARTER_CARDS.map((card) => (
-								<button key={card.id} type="button" className="starter-card" onClick={() => useStarterPrompt(card.prompt)}>
+								<button key={card.id} type="button" className="starter-card" onClick={() => useStarterPrompt(card.prompt)} disabled={!intakeApproved}>
 									<span className="starter-tag">Starter</span>
 									<h3>{card.title}</h3>
 									<p>{card.description}</p>
@@ -932,16 +1174,17 @@ export default function App() {
 								ref={textareaRef}
 								value={draft}
 								onChange={(event) => updateComposerHeight(event.target.value)}
+								disabled={!intakeApproved}
 								onKeyDown={(event) => {
 									if (event.key === "Enter" && !event.shiftKey) {
 										event.preventDefault()
 										sendMessage()
 									}
 								}}
-								placeholder="Start a new conversation..."
+								placeholder={intakeApproved ? "Start a new conversation..." : "Validate Intake ID to start chatting..."}
 								rows={2}
 							/>
-							<button type="submit" aria-label="Send message" className="send-btn" disabled={sending || !draft.trim()}>
+							<button type="submit" aria-label="Send message" className="send-btn" disabled={sending || !draft.trim() || !intakeApproved}>
 								<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" width="20" height="20">
 									<path d="M22 2L11 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
 									<path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
