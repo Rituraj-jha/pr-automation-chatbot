@@ -1,6 +1,7 @@
 """Context builder — assembles the system prompt with dynamic context."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -70,7 +71,85 @@ def _build_pre_validation_section() -> str:
     ])
 
 
-def build_system_prompt(session: Session, user_profile: str | None) -> str:
+def _build_route_skills_section(active_route: str | None = None) -> str:
+    """Build create/update route skill context from context/skills/*.md."""
+    skills_dir = _CONTEXT_DIR / "skills"
+    if not skills_dir.exists():
+        return ""
+    parts = ["\n\n# Route Skills"]
+    if active_route == "create":
+        names = ["create_resource.md"]
+    elif active_route == "update":
+        names = ["update_resource.md"]
+    else:
+        names = ["create_resource.md", "update_resource.md"]
+    for name in names:
+        path = skills_dir / name
+        if path.exists():
+            parts.append(path.read_text(encoding="utf-8").strip())
+    return "\n\n".join(parts)
+
+
+def _build_update_capabilities_section(active_route: str | None = None) -> str:
+    """Build update route requirements from config/update_capabilities.yaml."""
+    if active_route != "update":
+        return "\n\n# Update Capabilities\nHidden unless the active route is `update`."
+
+    path = _CONFIG_DIR / "update_capabilities.yaml"
+    if not path.exists():
+        return "\n\n# Update Capabilities\nNo update capability config found."
+
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    capabilities = data.get("update_capabilities", {}) or {}
+    lines = [
+        "\n\n# Update Capabilities (dynamic from config/update_capabilities.yaml)",
+        "Use this only in update route. In create route, do not switch to update when a resource already exists.",
+    ]
+    for resource_type, capability in capabilities.items():
+        enabled = bool(capability.get("enabled", False))
+        display = capability.get("display_name", resource_type)
+        lines.append(f"- `{resource_type}` — {display}; update_enabled={str(enabled).lower()}")
+        if not enabled:
+            reason = capability.get("reason")
+            if reason:
+                lines.append(f"  - reason: {reason}")
+            continue
+        required_inputs = capability.get("required_inputs", []) or []
+        if required_inputs:
+            lines.append("  - Required before fetching existing file:")
+            for field in required_inputs:
+                example = field.get("example")
+                example_text = f"; example: {example}" if example else ""
+                lines.append(f"    - `{field.get('name')}` — {field.get('description', '')}{example_text}")
+        if capability.get("append_only"):
+            lines.append("  - Update rule: append-only; do not modify/delete existing YAML.")
+        input_rule = capability.get("input_rule")
+        if input_rule:
+            lines.append(f"  - Input rule: {input_rule}")
+    lines.append("Never invent branch, resource_name, or file_path. Prefer asking for branch + resource_name; use full file_path only if user provides it or name lookup is ambiguous.")
+    return "\n".join(lines)
+
+
+def _filter_system_prompt_for_route(system_md: str, active_route: str | None) -> str:
+    """Remove route-specific guidance that is not relevant to the active route."""
+    if active_route == "create":
+        return re.sub(
+            r"\n---\n\n# Resource Update Flow\n.*?(?=\n---\n)",
+            "",
+            system_md,
+            flags=re.DOTALL,
+        )
+    if active_route == "update":
+        return re.sub(
+            r"\n---\n\n# Resource Creation Flow\n.*?(?=\n---\n)",
+            "",
+            system_md,
+            flags=re.DOTALL,
+        )
+    return system_md
+
+
+def build_system_prompt(session: Session, user_profile: str | None, active_route: str | None = None) -> str:
     """
     Build the full system prompt by combining:
     1. Base system prompt (system.md)
@@ -79,6 +158,7 @@ def build_system_prompt(session: Session, user_profile: str | None) -> str:
     """
     # 1. Base system prompt
     system_md = (_CONTEXT_DIR / "system.md").read_text(encoding="utf-8")
+    system_md = _filter_system_prompt_for_route(system_md, active_route)
 
     # 2. User profile
     profile_section = ""
@@ -100,7 +180,13 @@ def build_system_prompt(session: Session, user_profile: str | None) -> str:
     # 4. Pre-validation requirements from pre_validations.yaml
     pre_validation_hint = _build_pre_validation_section()
 
-    return system_md + profile_section + resource_hint + pre_validation_hint
+    # 5. Route skills
+    route_skills_hint = _build_route_skills_section(active_route)
+
+    # 6. Update capabilities
+    update_capabilities_hint = _build_update_capabilities_section(active_route)
+
+    return system_md + profile_section + resource_hint + pre_validation_hint + route_skills_hint + update_capabilities_hint
 
 
 def build_conversation_messages(session: Session) -> list[dict]:

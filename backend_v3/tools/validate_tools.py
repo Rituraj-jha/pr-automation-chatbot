@@ -75,6 +75,48 @@ def _stage1_normalize(field_name: str, value: Any, field_spec: dict) -> Any:
     return str_value
 
 
+def _extract_option_values(options: list) -> list[str]:
+    """Extract configured option values from strings or {value,label} objects."""
+    values = []
+    for opt in options or []:
+        if isinstance(opt, dict):
+            values.append(str(opt.get("value", "")))
+        else:
+            values.append(str(opt))
+    return [value for value in values if value != ""]
+
+
+def _collect_field_specs(config: dict) -> dict[str, dict]:
+    """Return collect field specs keyed by field name."""
+    return {
+        str(field.get("name")): field
+        for field in config.get("collect_fields", [])
+        if field.get("name")
+    }
+
+
+def _field_error(message: str, field_spec: dict | None = None, **extra: Any) -> dict[str, Any]:
+    """Build a structured field validation error."""
+    payload: dict[str, Any] = {"message": message}
+    if field_spec:
+        payload["label"] = field_spec.get("label", field_spec.get("name"))
+        options = _extract_option_values(field_spec.get("options", []))
+        if options:
+            payload["allowed_values"] = options
+        if field_spec.get("validation"):
+            payload["expected_format"] = field_spec.get("validation")
+    payload.update({k: v for k, v in extra.items() if v is not None})
+    return payload
+
+
+def _parse_field_from_error(error: str) -> str | None:
+    """Best-effort parse of 'field_name: message' validation errors."""
+    if ":" not in error:
+        return None
+    field_name = error.split(":", 1)[0].strip()
+    return field_name or None
+
+
 def _stage2_static(field_name: str, value: Any, field_spec: dict) -> list[str]:
     """Stage 2: Static validation (regex, options check). Returns list of errors."""
     errors = []
@@ -95,6 +137,92 @@ def _stage2_static(field_name: str, value: Any, field_spec: dict) -> list[str]:
             errors.append(f"{field_name}: invalid format (must match {validation})")
 
     return errors
+
+
+def validate_collect_fields(
+    resource_type: str,
+    current_fields: dict[str, Any],
+    incoming_fields: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate candidate collect-field values before they are persisted.
+
+    This is the deterministic pre-store gate used by `set_fields` and exposed
+    through `validate_fields`. It validates only collect_fields from the resource
+    config, normalizes accepted values, rejects unknown fields, enforces allowed
+    options/regex, and runs dependent/cross-field checks against the merged
+    current + incoming state.
+    """
+    config = _load_resource_config(resource_type)
+    if not config:
+        return {
+            "valid": False,
+            "errors": [f"No config for '{resource_type}'"],
+            "field_errors": {},
+            "cross_field_errors": [],
+            "normalized": {},
+            "warnings": [],
+        }
+
+    field_specs = _collect_field_specs(config)
+    normalized: dict[str, Any] = {}
+    field_errors: dict[str, dict[str, Any]] = {}
+    cross_field_errors: list[str] = []
+    warnings: list[str] = []
+
+    for field_name, value in (incoming_fields or {}).items():
+        field_spec = field_specs.get(field_name)
+        if not field_spec:
+            field_errors[field_name] = _field_error(
+                f"'{field_name}' is not a collected field for {resource_type}.",
+                allowed_fields=sorted(field_specs.keys()),
+            )
+            continue
+
+        norm_value = _stage1_normalize(field_name, value, field_spec)
+        normalized[field_name] = norm_value
+
+        allow_empty = bool(field_spec.get("allow_empty", False))
+        if allow_empty and str(norm_value) == "":
+            continue
+
+        options = _extract_option_values(field_spec.get("options", []))
+        if options and norm_value not in options:
+            field_errors[field_name] = _field_error(
+                f"Must be one of: {options}.",
+                field_spec,
+            )
+            continue
+
+        validation = field_spec.get("validation")
+        if validation and not re.match(validation, str(norm_value)):
+            field_errors[field_name] = _field_error(
+                f"Invalid format. Must match pattern: {validation}.",
+                field_spec,
+            )
+
+    merged = {**(current_fields or {}), **normalized}
+    dependent_errors = _stage3_dependent(merged, resource_type)
+    cross_errors = _stage4_cross_field(merged, resource_type)
+    for error in [*dependent_errors, *cross_errors]:
+        parsed_field = _parse_field_from_error(error)
+        if parsed_field and parsed_field in field_specs:
+            field_errors[parsed_field] = _field_error(error, field_specs.get(parsed_field))
+        else:
+            cross_field_errors.append(error)
+
+    flat_errors = [
+        f"{field_name}: {detail.get('message', 'Invalid value')}"
+        for field_name, detail in field_errors.items()
+    ] + cross_field_errors
+
+    return {
+        "valid": not flat_errors,
+        "errors": flat_errors,
+        "field_errors": field_errors,
+        "cross_field_errors": cross_field_errors,
+        "normalized": normalized,
+        "warnings": warnings,
+    }
 
 
 def _stage3_dependent(fields: dict, resource_type: str) -> list[str]:
@@ -165,44 +293,21 @@ async def validate_fields(resource_id: str, fields: dict | None = None, **kwargs
     if not config:
         return json.dumps({"error": f"No config for '{resource.resource_type}'"})
 
-    # Use provided fields or all collected fields
+    # If fields are provided, validate them as incoming values against current state.
+    # If omitted, validate current state as a whole.
+    current_fields = resource.collected_fields if fields is not None else {}
     target_fields = fields if fields is not None else dict(resource.collected_fields)
-
-    all_errors: list[str] = []
-    all_warnings: list[str] = []
-    normalized: dict[str, Any] = {}
-
-    # Stage 1 + 2: per-field normalization and static validation
-    for field_name, value in target_fields.items():
-        field_spec = next(
-            (f for f in config.get("collect_fields", []) if f["name"] == field_name),
-            None,
-        )
-        if not field_spec:
-            # Unknown field — skip silently
-            normalized[field_name] = value
-            continue
-
-        # Stage 1: Normalize
-        norm_value = _stage1_normalize(field_name, value, field_spec)
-        normalized[field_name] = norm_value
-
-        # Stage 2: Static validation
-        static_errors = _stage2_static(field_name, norm_value, field_spec)
-        all_errors.extend(static_errors)
-
-    # Stage 3: Dependent validation (uses normalized values)
-    merged = {**resource.collected_fields, **normalized}
-    dep_errors = _stage3_dependent(merged, resource.resource_type)
-    all_errors.extend(dep_errors)
-
-    # Stage 4: Cross-field validation
-    cross_errors = _stage4_cross_field(merged, resource.resource_type)
-    all_errors.extend(cross_errors)
+    validation = validate_collect_fields(resource.resource_type, current_fields, target_fields)
 
     return json.dumps({
-        "valid": len(all_errors) == 0,
-        "errors": all_errors if all_errors else None,
-        "warnings": all_warnings if all_warnings else None,
-        "normalized": normalized,
+        "valid": validation["valid"],
+        "errors": validation["errors"] if validation["errors"] else None,
+        "field_errors": validation["field_errors"] if validation["field_errors"] else None,
+        "cross_field_errors": validation["cross_field_errors"] if validation["cross_field_errors"] else None,
+        "warnings": validation["warnings"] if validation["warnings"] else None,
+        "normalized": validation["normalized"],
+        "instruction": (
+            "If valid is false, do not call set_fields for invalid values. "
+            "Ask the user to correct the listed fields using allowed_values/expected_format."
+        ),
     }, default=str)

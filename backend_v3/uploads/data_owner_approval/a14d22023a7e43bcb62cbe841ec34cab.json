@@ -1,0 +1,15 @@
+{
+  "file_id": "a14d22023a7e43bcb62cbe841ec34cab",
+  "file_name": "demo_image.jpg",
+  "file_type": "image/jpeg",
+  "stored_file": "a14d22023a7e43bcb62cbe841ec34cab.jpg",
+  "resource_types": [
+    "glue_db"
+  ],
+  "resource_ids": [
+    "glue_db_0"
+  ],
+  "session_id": "6d7bdf50-f106-45ae-844f-09087c1af47e",
+  "intake_id": "M0000777",
+  "uploaded_at": "2026-07-04T21:56:34.171968"
+}

@@ -12,12 +12,14 @@ from agent.guardrails import (
     guardrail_auto_derive,
     guardrail_auto_review,
     guardrail_block_pr_without_review,
+    guardrail_enforce_route,
+    guardrail_route_user_message,
     guardrail_session_field_persistence,
     guardrail_auto_check_intake_id,
 )
 from services.llm import chat_with_tools
 from tools.registry import TOOL_FUNCTIONS, TOOL_SCHEMAS
-from db.repository import load_user_profile, save_message
+from db.repository import load_session_fields, load_user_profile, save_message
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +41,19 @@ async def run_agent_turn(session: Session, user_message: str) -> str:
     session.add_message("user", user_message)
     await save_message(session.session_id, session.messages[-1])
 
+    route_block = await guardrail_route_user_message(session, user_message)
+    if route_block:
+        session.add_message("assistant", route_block)
+        await save_message(session.session_id, session.messages[-1])
+        return route_block
+
     # Load user profile for context
     profile = await load_user_profile(session.user_id)
+    session_fields = await load_session_fields(session.session_id)
+    active_route = session_fields.get("__active_route", "").strip() or None
 
     # Build system prompt
-    system_prompt = build_system_prompt(session, profile)
+    system_prompt = build_system_prompt(session, profile, active_route=active_route)
 
     # Build message history for LLM
     llm_messages: list[dict] = [{"role": "system", "content": system_prompt}]
@@ -51,6 +61,9 @@ async def run_agent_turn(session: Session, user_message: str) -> str:
 
     # Guardrail 1: auto-inject fresh state
     await guardrail_auto_inject_state(llm_messages)
+
+    # Track whether generate_yaml was called this turn to block same-turn PR
+    generate_yaml_called_this_turn = False
 
     # Agent loop
     for iteration in range(MAX_TOOL_ITERATIONS):
@@ -74,8 +87,17 @@ async def run_agent_turn(session: Session, user_message: str) -> str:
             except json.JSONDecodeError:
                 args = {}
 
+            # Route guardrail: create-route and update-route tools cannot mix in one session.
+            blocked = await guardrail_enforce_route(func_name, args)
             # Guardrail 4: Block PR if resources are in REVIEWING
-            blocked = await guardrail_block_pr_without_review(func_name, args)
+            if not blocked:
+                blocked = await guardrail_block_pr_without_review(func_name, args)
+            # Guardrail: Block create_pr in the same turn where generate_yaml was called
+            if not blocked and func_name in ("create_pr", "create_update_pr") and generate_yaml_called_this_turn:
+                blocked = json.dumps({
+                    "error": "Cannot create PR in the same turn as YAML generation.",
+                    "reason": "After review passes, inform the user the resource is ready and wait for them to explicitly request PR creation in a new message.",
+                })
             if blocked:
                 result = blocked
             else:
@@ -89,6 +111,10 @@ async def run_agent_turn(session: Session, user_message: str) -> str:
                     except Exception as e:
                         logger.exception(f"Tool {func_name} failed")
                         result = json.dumps({"error": str(e)})
+
+            # Track generate_yaml calls this turn
+            if func_name == "generate_yaml" and "error" not in result:
+                generate_yaml_called_this_turn = True
 
             # Guardrail 2: auto-derive if collection just completed
             result = await guardrail_auto_derive(func_name, result, tool_call["id"])

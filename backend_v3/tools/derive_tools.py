@@ -272,9 +272,23 @@ async def derive_fields(resource_id: str, **kwargs) -> str:
     resource.status = ResourceStatus.CONFIRMING
     await save_resource(session.session_id, resource)
 
+    # Code-enforced create-flow existence check: after derivation, resolve the
+    # expected MIW repo path and block later create PR if the file already exists.
+    resource_existence = None
+    try:
+        from tools.repo_tools import check_resource_exists
+        existence_result = await check_resource_exists(resource_id=resource.resource_id)
+        resource_existence = json.loads(existence_result)
+    except Exception as exc:
+        resource_existence = {
+            "error": "Repository existence check failed",
+            "detail": str(exc),
+        }
+
     return json.dumps({
         "resource_id": resource.resource_id,
         "status": "confirming",
         "derived_fields": derived,
         "all_fields": resource.all_fields,
+        "resource_existence": resource_existence,
     })

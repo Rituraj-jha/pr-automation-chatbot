@@ -1,0 +1,40 @@
+# Resource update capabilities
+# Used only by the update route. Create flow must not use this to switch into update.
+
+update_capabilities:
+  s3:
+    enabled: true
+    display_name: "S3 Bucket"
+    append_only: true
+    required_inputs:
+      - name: branch
+        label: "Target branch"
+        description: "Branch that contains the existing YAML file and will receive the update PR."
+        required: true
+        example: "main"
+      - name: file_path
+        label: "Repo-relative YAML file path"
+        description: "Existing S3 YAML file path in the MIW repo. Optional if resource_name is provided. Do not invent this value."
+        required: false
+        example: "aws_lakehouse/lakehouse-001/s3/prd-lh1-agtr-src.yaml"
+      - name: resource_name
+        label: "Resource name"
+        description: "Existing S3 bucket/resource name. Backend can locate the YAML file from repo_directory_map.yaml. Optional if file_path is provided."
+        required: false
+        example: "prd-lh1-agtr-src"
+    input_rule: "Ask for branch and either resource_name or file_path. Prefer resource_name for easier UX."
+    allowed_operations:
+      - append
+    reviewer_tool: review_yaml
+    diff_required_before_pr: true
+    description: "Allows append-only updates to an existing S3 YAML file. Used to simulate the update flow for now."
+
+  glue_db:
+    enabled: false
+    display_name: "Glue Database"
+    reason: "Glue DB update flow is not enabled yet."
+
+  iam:
+    enabled: false
+    display_name: "IAM"
+    reason: "IAM support is not implemented yet. Use S3 to simulate update flow for now."

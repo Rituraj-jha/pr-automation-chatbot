@@ -142,6 +142,7 @@ async def check_intake_id(intake_id: str, **kwargs) -> str:
 
 async def validate_data_owner_approval_document(
     resource_types: list[str],
+    resource_ids: list[str] | None = None,
     file_id: str | None = None,
     file_name: str | None = None,
     file_type: str | None = None,
@@ -183,6 +184,7 @@ async def validate_data_owner_approval_document(
         file_name = file_name or uploaded_file.get("file_name")
         file_type = file_type or uploaded_file.get("file_type")
         intake_id = intake_id or uploaded_file.get("intake_id")
+        resource_ids = resource_ids or uploaded_file.get("resource_ids") or None
 
     configured_resources = set(requirements.get("resources", []))
     requested_resources = [str(r).strip().lower() for r in resource_types if str(r).strip()]
@@ -200,38 +202,147 @@ async def validate_data_owner_approval_document(
             "message": "No requested resources require data owner approval.",
         })
 
-    # MOCK: Always passes. Persist result so create_resources can proceed on retry.
+    approved_resources = []
+    remaining_targets = []
+    auto_derived = []
+
+    # MOCK: Always passes. Persist result so field collection can proceed for
+    # the exact approved resource_id(s). Do not approve every glue_db just
+    # because a single glue_db approval image was uploaded.
     try:
-        from tools.session_tools import _get_session, _approval_key, _pending_approval_key
+        from tools.session_tools import (
+            _all_required_present,
+            _get_session,
+            _approval_key,
+            _load_resource_config,
+            _pending_approval_key,
+        )
+        from tools.derive_tools import derive_fields
         from db.repository import load_session_fields, save_session_field
 
         session = _get_session()
-        for resource_type in approved_for:
-            await save_session_field(
-                session.session_id,
-                _approval_key(resource_type, "data_owner_approval"),
-                "true",
-            )
         session_fields = await load_session_fields(session.session_id)
         pending_raw = session_fields.get(_pending_approval_key("data_owner_approval"))
         if pending_raw:
             try:
                 pending = json.loads(pending_raw)
-                remaining = [
-                    r for r in pending.get("resource_types", [])
-                    if str(r).strip().lower() not in approved_for
+                pending_blocked = [
+                    item for item in pending.get("blocked", [])
+                    if isinstance(item, dict)
+                    and str(item.get("resource_type", "")).strip().lower() in approved_for
                 ]
-                if remaining:
-                    pending["resource_types"] = remaining
-                    pending["blocked"] = [
-                        item for item in pending.get("blocked", [])
-                        if item.get("resource_type") in remaining
+                requested_ids = {str(r).strip() for r in (resource_ids or []) if str(r).strip()}
+                requested_intake = str(intake_id or "").strip().upper()
+
+                if requested_ids:
+                    matched = [item for item in pending_blocked if str(item.get("resource_id")) in requested_ids]
+                elif requested_intake:
+                    matched = [
+                        item for item in pending_blocked
+                        if str(item.get("intake_id") or "").strip().upper() == requested_intake
                     ]
+                elif len(pending_blocked) == 1:
+                    matched = pending_blocked
+                else:
+                    pending_targets = [
+                        {
+                            "resource_id": item.get("resource_id"),
+                            "resource_type": item.get("resource_type"),
+                            "intake_id": item.get("intake_id"),
+                        }
+                        for item in pending_blocked
+                    ]
+                    return json.dumps({
+                        "valid": False,
+                        "mock": True,
+                        "requires_target": True,
+                        "approved_for": [],
+                        "pending_targets": pending_targets,
+                        "message": "Multiple pending resources require approval. Choose which resource_id(s) this uploaded document applies to, or select all matching resources if the same document covers them.",
+                    })
+
+                if not matched:
+                    pending_targets = [
+                        {
+                            "resource_id": item.get("resource_id"),
+                            "resource_type": item.get("resource_type"),
+                            "intake_id": item.get("intake_id"),
+                        }
+                        for item in pending_blocked
+                    ]
+                    return json.dumps({
+                        "valid": False,
+                        "mock": True,
+                        "approved_for": [],
+                        "requested_resource_ids": sorted(requested_ids),
+                        "requested_intake_id": requested_intake or None,
+                        "pending_targets": pending_targets,
+                        "message": "The uploaded approval did not match any pending resource target. Select the intended resource_id/intake_id and upload/send again.",
+                    })
+
+                approved_resource_ids = {str(item.get("resource_id")) for item in matched if item.get("resource_id")}
+                for item in matched:
+                    resource_id = item.get("resource_id")
+                    if not resource_id:
+                        continue
+                    await save_session_field(
+                        session.session_id,
+                        _approval_key(str(resource_id), "data_owner_approval"),
+                        "true",
+                    )
+                    approved_resources.append({
+                        "resource_id": resource_id,
+                        "resource_type": item.get("resource_type"),
+                        "intake_id": item.get("intake_id"),
+                    })
+
+                remaining_blocked = [
+                    item for item in pending.get("blocked", [])
+                    if str(item.get("resource_id")) not in approved_resource_ids
+                ]
+                remaining_targets = [
+                    {
+                        "resource_id": item.get("resource_id"),
+                        "resource_type": item.get("resource_type"),
+                        "intake_id": item.get("intake_id"),
+                    }
+                    for item in remaining_blocked
+                ]
+                if remaining_blocked:
+                    pending["blocked"] = remaining_blocked
+                    pending["resource_types"] = sorted({
+                        str(item.get("resource_type", "")).strip().lower()
+                        for item in remaining_blocked
+                        if item.get("resource_type")
+                    })
+                    pending["resource_ids"] = [item.get("resource_id") for item in remaining_blocked if item.get("resource_id")]
+                    pending["pending_targets"] = remaining_targets
                     await save_session_field(session.session_id, _pending_approval_key("data_owner_approval"), json.dumps(pending))
                 else:
                     await save_session_field(session.session_id, _pending_approval_key("data_owner_approval"), "")
+
+                for approved in approved_resources:
+                    resource_id = approved.get("resource_id")
+                    resource = session.get_resource(str(resource_id)) if resource_id else None
+                    if not resource:
+                        continue
+                    config = _load_resource_config(resource.resource_type)
+                    if resource.status.value == "collecting" and config and _all_required_present(resource, config):
+                        derive_result = await derive_fields(resource_id=resource.resource_id)
+                        try:
+                            auto_derived.append(json.loads(derive_result))
+                        except json.JSONDecodeError:
+                            auto_derived.append({"resource_id": resource.resource_id, "result": derive_result})
             except (json.JSONDecodeError, TypeError):
                 await save_session_field(session.session_id, _pending_approval_key("data_owner_approval"), "")
+        else:
+            # Compatibility fallback for tests without pending resource state.
+            for resource_type in approved_for:
+                await save_session_field(
+                    session.session_id,
+                    _approval_key(resource_type, "data_owner_approval"),
+                    "true",
+                )
     except RuntimeError:
         # Tool can still be called from tests or without a bound chat session.
         pass
@@ -240,6 +351,9 @@ async def validate_data_owner_approval_document(
         "valid": True,
         "mock": True,
         "approved_for": approved_for,
+        "approved_resources": approved_resources,
+        "remaining_targets": remaining_targets,
+        "auto_derived": auto_derived,
         "skipped": skipped,
         "missing_for": [],
         "intake_id": intake_id,

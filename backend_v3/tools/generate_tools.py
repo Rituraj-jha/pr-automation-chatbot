@@ -9,7 +9,7 @@ import yaml as pyyaml
 
 from models.state import ResourceStatus
 from tools.session_tools import _get_session
-from db.repository import save_resource
+from db.repository import load_session_fields, save_resource
 
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
@@ -104,6 +104,33 @@ async def generate_yaml(resource_id: str, **kwargs) -> str:
     if resource.status not in (ResourceStatus.CONFIRMING, ResourceStatus.REVIEWING):
         return json.dumps({"error": f"Resource must be in 'confirming' or 'reviewing' state for YAML generation. Current: {resource.status.value}"})
 
+    session_fields = await load_session_fields(session.session_id)
+    exists_key = f"__resource_exists:{resource.resource_id}"
+    existence_value = session_fields.get(exists_key)
+    if existence_value in {"true", "unknown"}:
+        detail_raw = session_fields.get(f"__resource_existence_detail:{resource.resource_id}")
+        detail = {}
+        if detail_raw:
+            try:
+                detail = json.loads(detail_raw)
+            except json.JSONDecodeError:
+                detail = {}
+        if existence_value == "unknown":
+            return json.dumps({
+                "error": "Cannot generate YAML for create PR because repository existence could not be verified.",
+                "resource_id": resource.resource_id,
+                "resource_type": resource.resource_type,
+                "path": detail.get("path"),
+                "action_needed": detail.get("action_needed"),
+                "next_action": "Authenticate/configure GitHub repository access, then re-check whether this resource exists.",
+            })
+        return json.dumps({
+            "error": "Cannot generate YAML for create PR because this resource already exists in the repository.",
+            "resource_id": resource.resource_id,
+            "resource_type": resource.resource_type,
+            "path": detail.get("path"),
+            "next_action": "Change the fields/name that derive the resource name, or create another resource. This create flow will not switch to update automatically.",
+        })
 
     config = _load_resource_config(resource.resource_type)
     all_fields = resource.all_fields

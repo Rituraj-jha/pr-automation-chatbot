@@ -7,6 +7,7 @@ from __future__ import annotations
 import base64
 import sys
 import json
+import re
 import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -28,13 +29,13 @@ from db.repository import (
     update_session_title, get_session_messages, save_message,
     save_resource, load_session_fields, save_session_field,
 )
-from tools.session_tools import bind_session
+from tools.session_tools import bind_session, _stage_pending_approval_if_collection_complete
 from agent.loop import run_agent_turn
 
 _CONFIG_DIR = Path(__file__).resolve().parent / "config"
 _APPROVAL_UPLOAD_DIR = Path(__file__).resolve().parent / "uploads" / "data_owner_approval"
 _PENDING_APPROVAL_KEY = "__pending_pre_validation:data_owner_approval"
-_VALIDATED_INTAKE_KEY = "__validated_intake"
+_PENDING_UPDATE_KEY = "__pending_update"
 
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
@@ -53,7 +54,12 @@ app = FastAPI(title="MiNi Agent API", version="3.0.0", lifespan=lifespan)
 # CORS for frontend dev server
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -96,6 +102,64 @@ def _mentions_resource_type(message: str, resource_type: str) -> bool:
     return False
 
 
+def _resource_alias_pattern(resource_type: str) -> str:
+    if resource_type == "glue_db":
+        return r"(?:glue[_\s-]?db|gluedb|glue\s+database)"
+    if resource_type == "s3":
+        return r"(?:s3|s3\s+bucket|bucket)"
+    return re.escape(resource_type).replace("_", r"[_\s-]?")
+
+
+def _mentioned_resource_ids(message: str, session: Session) -> list[str]:
+    """Resolve explicit resource references like glue_db_0 or 'gluedb 0'."""
+    text = message.lower()
+    matched: list[str] = []
+    for resource in session.resources:
+        rid = resource.resource_id.lower()
+        if re.search(rf"\b{re.escape(rid)}\b", text):
+            matched.append(resource.resource_id)
+            continue
+
+        suffix = resource.resource_id.rsplit("_", 1)[-1]
+        if not suffix.isdigit():
+            continue
+        alias_pattern = _resource_alias_pattern(resource.resource_type)
+        if re.search(rf"\b{alias_pattern}\s*[_#-]?\s*{re.escape(suffix)}\b", text):
+            matched.append(resource.resource_id)
+
+    seen = set()
+    ordered = []
+    for rid in matched:
+        if rid not in seen:
+            seen.add(rid)
+            ordered.append(rid)
+    return ordered
+
+
+async def _save_pending_approval_targets(session_id: str, pending: dict, blocked: list[dict]) -> None:
+    """Persist pending approval after removing resolved/dropped resource targets."""
+    if not blocked:
+        await save_session_field(session_id, _PENDING_APPROVAL_KEY, "")
+        return
+
+    pending["blocked"] = blocked
+    pending["resource_types"] = sorted({
+        str(item.get("resource_type", "")).strip().lower()
+        for item in blocked
+        if item.get("resource_type")
+    })
+    pending["resource_ids"] = [item.get("resource_id") for item in blocked if item.get("resource_id")]
+    pending["pending_targets"] = [
+        {
+            "resource_id": item.get("resource_id"),
+            "resource_type": item.get("resource_type"),
+            "intake_id": item.get("intake_id"),
+        }
+        for item in blocked
+    ]
+    await save_session_field(session_id, _PENDING_APPROVAL_KEY, json.dumps(pending))
+
+
 async def _load_pending_approval(session_id: str) -> dict | None:
     """Load unresolved data-owner approval pending state from session fields."""
     session_fields = await load_session_fields(session_id)
@@ -106,6 +170,35 @@ async def _load_pending_approval(session_id: str) -> dict | None:
         pending = json.loads(pending_raw)
     except json.JSONDecodeError:
         return None
+
+    blocked = [item for item in pending.get("blocked", []) if isinstance(item, dict)]
+    if blocked:
+        unresolved_blocked = [
+            item for item in blocked
+            if session_fields.get(f"__pre_validation:data_owner_approval:{item.get('resource_id')}") != "true"
+        ]
+        if not unresolved_blocked:
+            await save_session_field(session_id, _PENDING_APPROVAL_KEY, "")
+            return None
+        pending["blocked"] = unresolved_blocked
+        pending["resource_types"] = sorted({
+            str(item.get("resource_type", "")).strip().lower()
+            for item in unresolved_blocked
+            if item.get("resource_type")
+        })
+        pending["resource_ids"] = [item.get("resource_id") for item in unresolved_blocked if item.get("resource_id")]
+        pending["pending_targets"] = [
+            {
+                "resource_id": item.get("resource_id"),
+                "resource_type": item.get("resource_type"),
+                "intake_id": item.get("intake_id"),
+            }
+            for item in unresolved_blocked
+        ]
+        return pending
+
+    # Backward-compatible fallback for older pending payloads that only stored
+    # resource types. New flows should use blocked/resource_id entries above.
     resource_types = [str(r).strip().lower() for r in pending.get("resource_types", []) if str(r).strip()]
     unresolved = [
         r for r in resource_types
@@ -128,6 +221,42 @@ async def _handle_pending_approval_skip(session: Session, message: str) -> str |
     if not pending:
         return None
 
+    explicit_resource_ids = _mentioned_resource_ids(message, session)
+    if explicit_resource_ids:
+        dropped_ids = []
+        for resource_id in explicit_resource_ids:
+            resource = session.get_resource(resource_id)
+            if not resource or resource.status == ResourceStatus.DROPPED:
+                continue
+            resource.status = ResourceStatus.DROPPED
+            await save_resource(session.session_id, resource)
+            dropped_ids.append(resource.resource_id)
+
+        if not dropped_ids:
+            return None
+
+        dropped_set = set(dropped_ids)
+        blocked = [item for item in pending.get("blocked", []) if isinstance(item, dict)]
+        if blocked:
+            remaining_blocked = [item for item in blocked if item.get("resource_id") not in dropped_set]
+            await _save_pending_approval_targets(session.session_id, pending, remaining_blocked)
+        else:
+            remaining_blocked = []
+
+        remaining_targets = [
+            item.get("resource_id")
+            for item in remaining_blocked
+            if item.get("resource_id")
+        ]
+        labels = ", ".join(dropped_ids)
+        if remaining_targets:
+            return f"Dropped {labels}. Approval is still needed for: {', '.join(remaining_targets)}."
+
+        active_remaining = [r for r in session.resources if r.status != ResourceStatus.DROPPED]
+        if active_remaining:
+            return f"Dropped {labels}. I’ll continue with the remaining active resource request."
+        return f"Dropped {labels}. No remaining resources are active in this request."
+
     pending_types = pending.get("resource_types", [])
     skip_types = [rtype for rtype in pending_types if _mentions_resource_type(message, rtype)]
     if not skip_types and any(token in text for token in ("approval", "don't have", "do not have", "no document", "later")):
@@ -136,18 +265,32 @@ async def _handle_pending_approval_skip(session: Session, message: str) -> str |
         return None
 
     skipped_set = set(skip_types)
+    blocked = [item for item in pending.get("blocked", []) if isinstance(item, dict)]
+    pending_resource_ids = {
+        item.get("resource_id")
+        for item in blocked
+        if item.get("resource_id") and item.get("resource_type") in skipped_set
+    }
     for resource in session.resources:
-        if resource.resource_type in skipped_set and resource.status != ResourceStatus.DROPPED:
+        should_drop = (
+            resource.resource_id in pending_resource_ids
+            if pending_resource_ids
+            else resource.resource_type in skipped_set
+        )
+        if should_drop and resource.status != ResourceStatus.DROPPED:
             resource.status = ResourceStatus.DROPPED
             await save_resource(session.session_id, resource)
 
-    remaining = [rtype for rtype in pending_types if rtype not in skipped_set]
-    if remaining:
-        pending["resource_types"] = remaining
-        pending["blocked"] = [item for item in pending.get("blocked", []) if item.get("resource_type") in remaining]
-        await save_session_field(session.session_id, _PENDING_APPROVAL_KEY, json.dumps(pending))
+    if blocked:
+        remaining_blocked = [item for item in blocked if item.get("resource_type") not in skipped_set]
+        await _save_pending_approval_targets(session.session_id, pending, remaining_blocked)
     else:
-        await save_session_field(session.session_id, _PENDING_APPROVAL_KEY, "")
+        remaining = [rtype for rtype in pending_types if rtype not in skipped_set]
+        if remaining:
+            pending["resource_types"] = remaining
+            await save_session_field(session.session_id, _PENDING_APPROVAL_KEY, json.dumps(pending))
+        else:
+            await save_session_field(session.session_id, _PENDING_APPROVAL_KEY, "")
 
     labels = ", ".join(_display_resource_type(rtype) for rtype in skip_types)
     active_remaining = [r for r in session.resources if r.status != ResourceStatus.DROPPED]
@@ -156,64 +299,49 @@ async def _handle_pending_approval_skip(session: Session, message: str) -> str |
     return f"Skipped {labels}. No remaining resources are active in this request."
 
 
-async def _load_validated_intake(session_id: str) -> dict | None:
-    """Load session-scoped validated intake details, if present."""
-    session_fields = await load_session_fields(session_id)
-    raw = session_fields.get(_VALIDATED_INTAKE_KEY)
-    if raw:
-        try:
-            data = json.loads(raw)
-            if data.get("status") == "approved_and_ready_for_design" and data.get("intake_id"):
-                return data
-        except json.JSONDecodeError:
-            pass
-
-    # Backward-compatible fallback if only the plain intake_id session field exists.
-    intake_id = session_fields.get("intake_id")
-    if intake_id:
-        return {
-            "valid": True,
-            "can_start_chat": True,
-            "status": "approved_and_ready_for_design",
-            "intake_id": intake_id,
-            "message": f"Intake ID '{intake_id}' is already validated for this session.",
-            "restored": True,
-        }
-    return None
-
-
 # ─── Auth routes ──────────────────────────────────────────────────────────────
 
 @app.get("/auth/github")
-async def auth_github():
+async def auth_github(return_to: str | None = None):
     """Redirect user to Cargill GitHub Enterprise OAuth page."""
     from fastapi.responses import RedirectResponse
     from auth import get_auth_url
-    return RedirectResponse(url=get_auth_url(), status_code=302)
+    return RedirectResponse(url=get_auth_url(return_to=return_to), status_code=302)
 
 
 @app.get("/auth/github/callback")
 async def auth_github_callback(code: str | None = None, state: str | None = None):
     """Handle GitHub OAuth callback — exchange code, get username, redirect to frontend."""
     from fastapi.responses import RedirectResponse
-    from auth import exchange_code, get_username, FRONTEND_URL
+    from auth import exchange_code, get_username, pop_state, FRONTEND_URL, ALLOWED_REDIRECT_ORIGINS
     from db.repository import save_github_token
     import logging
 
-    if not code:
+    # Determine redirect target from state
+    state_data = pop_state(state) if state else None
+    if state and state_data is None:
         return RedirectResponse(url=f"{FRONTEND_URL}?auth_error=true", status_code=302)
 
+    return_to = (state_data or {}).get("return_to")
+    # Validate return_to against allowed origins
+    redirect_base = FRONTEND_URL
+    if return_to and any(return_to.rstrip("/").startswith(origin) for origin in ALLOWED_REDIRECT_ORIGINS):
+        redirect_base = return_to.rstrip("/")
+
+    if not code:
+        return RedirectResponse(url=f"{redirect_base}?auth_error=true", status_code=302)
+
     try:
-        token = await exchange_code(code, state)
+        token = await exchange_code(code)
         username = await get_username(token)
         # Persist token for PR creation
         await save_github_token(username, token)
     except Exception as e:
         logging.getLogger(__name__).error(f"OAuth callback failed: {e}")
-        return RedirectResponse(url=f"{FRONTEND_URL}?auth_error=true", status_code=302)
+        return RedirectResponse(url=f"{redirect_base}?auth_error=true", status_code=302)
 
     return RedirectResponse(
-        url=f"{FRONTEND_URL}?auth=success&github_user={username}",
+        url=f"{redirect_base}?auth=success&github_user={username}",
         status_code=302,
     )
 
@@ -293,20 +421,61 @@ async def get_chat_messages(chat_id: str, request: Request):
     return messages
 
 
-@app.get("/api/chats/{chat_id}/intake")
-async def get_chat_intake(chat_id: str, request: Request):
-    """Return previously validated intake ID for this chat session, if any."""
-    intake = await _load_validated_intake(chat_id)
-    if not intake:
-        return {"validated": False}
-    return {"validated": True, **intake}
-
-
 @app.delete("/api/chats/{chat_id}")
 async def delete_chat(chat_id: str, request: Request):
     """Delete a chat session."""
     await delete_session(chat_id)
     return None
+
+
+# ─── Debug routes ─────────────────────────────────────────────────────────────
+
+@app.get("/api/debug/chats/{chat_id}/state")
+async def debug_chat_state(chat_id: str, request: Request):
+    """Return full backend state for a chat session.
+
+    This endpoint is intended for the lightweight frontend_v2 debugging UI. It
+    exposes resources, session fields, messages, and decoded helper state so a
+    tester can see exactly what the backend knows after each step.
+    """
+    session = await load_session(chat_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    fields = await load_session_fields(chat_id)
+    messages = await get_session_messages(chat_id)
+
+    def _decode_json_field(key: str) -> Any:
+        raw = fields.get(key)
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+
+    resource_existence = {
+        key: value
+        for key, value in fields.items()
+        if key.startswith("__resource_exists:") or key.startswith("__resource_existence_detail:")
+    }
+
+    return {
+        "session": {
+            "session_id": session.session_id,
+            "user_id": session.user_id,
+            "resources": [resource.to_dict() for resource in session.resources],
+            "message_count": len(session.messages),
+        },
+        "session_fields": fields,
+        "messages": messages,
+        "debug": {
+            "active_route": fields.get("__active_route"),
+            "pending_approval": _decode_json_field(_PENDING_APPROVAL_KEY),
+            "pending_update": _decode_json_field(_PENDING_UPDATE_KEY),
+            "resource_existence": resource_existence,
+        },
+    }
 
 
 # ─── Main chat endpoint ───────────────────────────────────────────────────────
@@ -316,13 +485,9 @@ class ChatRequest(BaseModel):
     session_id: str
 
 
-class IntakeValidationRequest(BaseModel):
-    intake_id: str
-    session_id: str | None = None
-
-
 class DataOwnerApprovalValidationRequest(BaseModel):
     resource_types: list[str]
+    resource_ids: list[str] | None = None
     session_id: str | None = None
     intake_id: str | None = None
     file_id: str | None = None
@@ -334,33 +499,12 @@ class DataOwnerApprovalValidationRequest(BaseModel):
 
 class DataOwnerApprovalUploadRequest(BaseModel):
     resource_types: list[str]
+    resource_ids: list[str] | None = None
     session_id: str | None = None
     intake_id: str | None = None
     file_name: str
     file_type: str
     file_content_base64: str
-
-
-@app.post("/api/intake/validate")
-async def validate_intake_id(body: IntakeValidationRequest):
-    """Non-LLM Intake ID validation endpoint for UI-based pre-chat gating."""
-    intake_id = body.intake_id.strip()
-    if not intake_id:
-        raise HTTPException(status_code=400, detail="Intake ID cannot be empty")
-
-    from tools.intake_tools import check_intake_id
-
-    raw_result = await check_intake_id(intake_id=intake_id)
-    try:
-        result = json.loads(raw_result)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Invalid intake validation response")
-
-    if body.session_id and result.get("status") == "approved_and_ready_for_design" and result.get("can_start_chat"):
-        await save_session_field(body.session_id, _VALIDATED_INTAKE_KEY, json.dumps(result))
-        await save_session_field(body.session_id, "intake_id", str(result.get("intake_id", intake_id)).upper())
-
-    return result
 
 
 @app.post("/api/data-owner-approval/validate")
@@ -381,6 +525,7 @@ async def validate_data_owner_approval(body: DataOwnerApprovalValidationRequest,
 
     raw_result = await validate_data_owner_approval_document(
         resource_types=body.resource_types,
+        resource_ids=body.resource_ids,
         file_id=body.file_id,
         file_name=body.file_name,
         file_type=body.file_type,
@@ -445,6 +590,7 @@ async def upload_data_owner_approval(body: DataOwnerApprovalUploadRequest):
         "file_type": body.file_type,
         "stored_file": stored_path.name,
         "resource_types": body.resource_types,
+        "resource_ids": body.resource_ids or [],
         "session_id": body.session_id,
         "intake_id": body.intake_id,
         "uploaded_at": datetime.utcnow().isoformat(),
@@ -457,6 +603,7 @@ async def upload_data_owner_approval(body: DataOwnerApprovalUploadRequest):
         "file_name": body.file_name,
         "file_type": body.file_type,
         "resource_types": body.resource_types,
+        "resource_ids": body.resource_ids or [],
         "intake_id": body.intake_id,
         "message": "Approval document uploaded. The agent will validate it next.",
     }
@@ -568,6 +715,23 @@ def _build_resources_summary(session: Session) -> list[dict]:
     return summary
 
 
+def _is_collect_field_required(resource, field_spec: dict) -> bool:
+    """Return whether a collect field should be asked now for this resource."""
+    is_required = bool(field_spec.get("required", False))
+    allow_empty = bool(field_spec.get("allow_empty", False))
+
+    required_when = field_spec.get("required_when")
+    if required_when and not is_required:
+        if " == " in required_when:
+            cond_field, cond_value = required_when.split(" == ", 1)
+            actual = resource.collected_fields.get(cond_field.strip(), "")
+            if str(actual).strip() == cond_value.strip():
+                is_required = True
+                allow_empty = False
+
+    return is_required and not allow_empty
+
+
 async def _build_structured_data(session: Session) -> dict | None:
     """Post-process session state to build structured data for the frontend.
     
@@ -578,17 +742,25 @@ async def _build_structured_data(session: Session) -> dict | None:
     """
     active = [r for r in session.resources if r.status != ResourceStatus.DROPPED]
 
-    # If an approval-gated resource is pending, do not show field prompts for
-    # already-created resources yet. The user must upload approval or skip the
-    # gated resource first.
-    pending_approval = await _load_pending_approval(session.session_id)
-    if pending_approval:
-        return {
-            "type": "approval_required",
-            "resource_types": pending_approval.get("resource_types", []),
-            "blocked": pending_approval.get("blocked", []),
-            "message": "Data owner approval is required before continuing field collection.",
-        }
+    session_fields = await load_session_fields(session.session_id)
+    pending_update_raw = session_fields.get(_PENDING_UPDATE_KEY)
+    if pending_update_raw:
+        try:
+            pending_update = json.loads(pending_update_raw)
+        except json.JSONDecodeError:
+            pending_update = None
+        if pending_update and pending_update.get("diff"):
+            return {
+                "type": "update_diff",
+                "resource_type": pending_update.get("resource_type"),
+                "branch": pending_update.get("branch"),
+                "file_path": pending_update.get("file_path"),
+                "original_yaml": pending_update.get("original_yaml"),
+                "updated_yaml": pending_update.get("updated_yaml"),
+                "diff": pending_update.get("diff"),
+                "append_only_valid": pending_update.get("append_only_valid", False),
+                "status": pending_update.get("status"),
+            }
 
     # Show YAML preview only when every active resource is confirming.
     confirming = [r for r in active if r.status == ResourceStatus.CONFIRMING]
@@ -632,6 +804,67 @@ async def _build_structured_data(session: Session) -> dict | None:
     # For multiple resources, ask common missing fields first, then specific fields.
     collecting = [r for r in active if r.status == ResourceStatus.COLLECTING]
     if collecting:
+        intake_prompts = []
+        for resource in collecting:
+            if "intake_id" in resource.collected_fields:
+                continue
+            config = _load_resource_config(resource.resource_type)
+            if not config:
+                continue
+            intake_spec = next(
+                (fs for fs in config.get("collect_fields", []) if fs.get("name") == "intake_id"),
+                None,
+            )
+            if not intake_spec:
+                continue
+            field_info: dict[str, Any] = {
+                "field_name": "intake_id",
+                "label": intake_spec.get("label", "Intake ID"),
+                "description": intake_spec.get("description", "Request tracking ID"),
+            }
+            if intake_spec.get("placeholder"):
+                field_info["placeholder"] = intake_spec["placeholder"]
+            intake_prompts.append({
+                "resource_id": resource.resource_id,
+                "resource_type": resource.resource_type,
+                "fields": [field_info],
+            })
+
+        if intake_prompts:
+            if len(intake_prompts) == 1:
+                prompt = intake_prompts[0]
+                return {
+                    "type": "field_prompts",
+                    "mode": "intake_first",
+                    "resource_id": prompt["resource_id"],
+                    "resource_type": prompt["resource_type"],
+                    "fields": prompt["fields"],
+                    "total_resources": len(active),
+                    "message_hint": "Ask only for intake ID before collecting any other fields.",
+                }
+            return {
+                "type": "field_prompts",
+                "mode": "intake_first_multi",
+                "resources": intake_prompts,
+                "total_resources": len(active),
+                "message_hint": "Ask for intake ID for each listed resource in one message. The same intake ID may be used for multiple resources if applicable.",
+            }
+
+        # If all required collected fields are present, stage approval gates for
+        # resources that require data-owner approval before allowing derive /
+        # confirmation.
+        await _stage_pending_approval_if_collection_complete(session)
+        pending_approval = await _load_pending_approval(session.session_id)
+        if pending_approval:
+            return {
+                "type": "approval_required",
+                "resource_types": pending_approval.get("resource_types", []),
+                "resource_ids": pending_approval.get("resource_ids", []),
+                "pending_targets": pending_approval.get("pending_targets", []),
+                "blocked": pending_approval.get("blocked", []),
+                "message": "Data owner approval is required before moving to confirmation. Use the frontend upload control and set Target resource IDs to the pending resource IDs covered by the document. If one document covers multiple resources, enter all matching IDs comma-separated. Do not paste a file_id in chat.",
+            }
+
         if len(collecting) > 1:
             resource_missing: list[dict[str, Any]] = []
             missing_by_resource: dict[str, dict[str, dict[str, Any]]] = {}
@@ -648,10 +881,15 @@ async def _build_structured_data(session: Session) -> dict | None:
                     group_by_resource[resource.resource_id][field_name] = fs.get("group", "")
                     if field_name in resource.collected_fields:
                         continue
+                    if not _is_collect_field_required(resource, fs):
+                        continue
                     field_info: dict[str, Any] = {
                         "field_name": field_name,
                         "label": fs.get("label", field_name),
                         "description": fs.get("description", ""),
+                        "group": fs.get("group"),
+                        "session_reuse": fs.get("session_reuse", False),
+                        "default_from": fs.get("default_from"),
                     }
                     if fs.get("options"):
                         field_info["options"] = fs["options"]
@@ -668,10 +906,15 @@ async def _build_structured_data(session: Session) -> dict | None:
                     common_names &= set(missing_by_resource[rid].keys())
 
                 common_fields = []
+                same_resource_type = len({r.resource_type for r in collecting}) == 1
                 for field_name in sorted(common_names):
                     groups = {group_by_resource[rid].get(field_name, "") for rid in resource_ids}
-                    if len(groups) == 1 and "" not in groups:
-                        common_fields.append(missing_by_resource[resource_ids[0]][field_name])
+                    candidate = missing_by_resource[resource_ids[0]][field_name]
+                    if same_resource_type:
+                        if candidate.get("session_reuse") and field_name != "intake_id":
+                            common_fields.append(candidate)
+                    elif len(groups) == 1 and "" not in groups:
+                        common_fields.append(candidate)
 
                 if common_fields:
                     return {
@@ -681,6 +924,7 @@ async def _build_structured_data(session: Session) -> dict | None:
                         "resource_types": [r.resource_type for r in collecting],
                         "fields": common_fields,
                         "total_resources": len(active),
+                        "message_hint": "Ask these shared fields once for all listed resources. Do not repeat the same full field list per resource. Do not use placeholder-heavy examples. Say users can specify per-resource overrides if any value differs.",
                     }
 
                 for resource in collecting:
@@ -697,6 +941,7 @@ async def _build_structured_data(session: Session) -> dict | None:
                         "mode": "resource_specific",
                         "resources": resource_missing,
                         "total_resources": len(active),
+                        "message_hint": "Ask only these remaining per-resource fields. Keep it compact; no long one-line examples and no duplicate shared fields.",
                     }
 
         resource = collecting[0]
@@ -705,6 +950,8 @@ async def _build_structured_data(session: Session) -> dict | None:
             missing_fields = []
             for fs in config.get("collect_fields", []):
                 if fs["name"] not in resource.collected_fields:
+                    if not _is_collect_field_required(resource, fs):
+                        continue
                     field_info: dict[str, Any] = {
                         "field_name": fs["name"],
                         "label": fs.get("label", fs["name"]),

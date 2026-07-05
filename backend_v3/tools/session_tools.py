@@ -38,7 +38,11 @@ def _prefill_from_session(session: Session, new_resource: Resource) -> dict[str,
     if not config:
         return {}
 
-    valid_fields = {fs["name"] for fs in config.get("collect_fields", [])}
+    reusable_fields = {
+        fs["name"]
+        for fs in config.get("collect_fields", [])
+        if fs.get("session_reuse", False) and fs.get("name") != "intake_id"
+    }
 
     # Gather values from other resources (prefer most recent first)
     existing = [
@@ -49,7 +53,7 @@ def _prefill_from_session(session: Session, new_resource: Resource) -> dict[str,
     prefilled = {}
     for r in reversed(existing):  # most recent first wins
         for field_name, value in r.collected_fields.items():
-            if field_name in valid_fields and field_name not in new_resource.collected_fields:
+            if field_name in reusable_fields and field_name not in new_resource.collected_fields:
                 new_resource.collected_fields[field_name] = value
                 prefilled[field_name] = value
 
@@ -133,6 +137,98 @@ def _approval_key(resource_type: str, validation_type: str = "data_owner_approva
 def _pending_approval_key(validation_type: str = "data_owner_approval") -> str:
     """Session field key used to remember blocked resources awaiting approval."""
     return f"__pending_pre_validation:{validation_type}"
+
+
+def _resource_approval_key(resource_id: str, validation_type: str = "data_owner_approval") -> str:
+    """Resource-scoped pre-validation key.
+
+    Approval must be tracked per resource_id, not only per resource type. A
+    multi-Glue request can have glue_db_0 and glue_db_1 with different intake
+    IDs/documents, so `__pre_validation:data_owner_approval:glue_db` is too
+    coarse.
+    """
+    return _approval_key(resource_id, validation_type)
+
+
+def _missing_required_pre_validations(resource: Resource, config: dict | None, session_fields: dict[str, str]) -> tuple[list[str], list[dict]]:
+    """Return missing required pre-validations for a resource.
+
+    Data-owner approval is resource-scoped and is intentionally checked only
+    after required collect_fields are complete, immediately before the resource
+    can move from COLLECTING to CONFIRMING.
+    """
+    missing = []
+    details = []
+    for check in _required_pre_validations(resource.resource_type, config):
+        check_type = check.get("type")
+        if check_type == "data_owner_approval":
+            details.append(check)
+            if session_fields.get(_resource_approval_key(resource.resource_id, check_type)) != "true":
+                missing.append(check_type)
+    return missing, details
+
+
+async def _stage_pending_approval_if_collection_complete(session: Session) -> dict | None:
+    """Stage approval prompts only after all active collecting resources are complete.
+
+    This implements the desired order:
+    1. collect intake IDs first,
+    2. collect all normal required fields,
+    3. then ask for approval images for only the resources that require them,
+    4. only after approval, derive and move to CONFIRMING.
+    """
+    collecting = [
+        resource for resource in session.resources
+        if resource.status == ResourceStatus.COLLECTING
+    ]
+    if not collecting:
+        return None
+
+    configs: dict[str, dict | None] = {}
+    for resource in collecting:
+        config = _load_resource_config(resource.resource_type)
+        configs[resource.resource_id] = config
+        if not config or not _all_required_present(resource, config):
+            return None
+
+    session_fields = await load_session_fields(session.session_id)
+    blocked = []
+    for resource in collecting:
+        config = configs.get(resource.resource_id)
+        missing_pre_validations, validation_details = _missing_required_pre_validations(resource, config, session_fields)
+        if missing_pre_validations:
+            blocked.append({
+                "resource_id": resource.resource_id,
+                "resource_type": resource.resource_type,
+                "intake_id": resource.collected_fields.get("intake_id"),
+                "missing_pre_validations": missing_pre_validations,
+                "required_tool": "validate_data_owner_approval_document",
+                "validation_details": validation_details,
+                "message": f"{resource.resource_type} requires data owner approval before moving to confirmation.",
+            })
+
+    if not blocked:
+        return None
+
+    pending_resource_types = sorted({item["resource_type"] for item in blocked})
+    pending = {
+        "validation_type": "data_owner_approval",
+        "resource_types": pending_resource_types,
+        "resource_ids": [item["resource_id"] for item in blocked],
+        "pending_targets": [
+            {
+                "resource_id": item["resource_id"],
+                "resource_type": item["resource_type"],
+                "intake_id": item.get("intake_id"),
+            }
+            for item in blocked
+        ],
+        "blocked": blocked,
+        "stage": "after_collection_before_confirmation",
+        "message": "Data owner approval is required before moving completed resources to confirmation.",
+    }
+    await save_session_field(session.session_id, _pending_approval_key("data_owner_approval"), json.dumps(pending))
+    return pending
 
 
 def _load_pre_validation_config() -> dict:
@@ -226,6 +322,42 @@ def _validate_initial_field(field_name: str, value: Any, config: dict) -> bool:
     return True
 
 
+def _find_existing_active_resource(
+    session: Session,
+    resource_type: str,
+    initial_fields: dict[str, Any],
+    config: dict | None,
+) -> Resource | None:
+    """Find an existing in-progress resource that matches this create request.
+
+    This makes `create_resources` idempotent for approval/intake retries. After a
+    resource is blocked by data-owner approval, the LLM may incorrectly retry
+    creation instead of continuing on the existing resource_id. If the retry has
+    the same resource type and same intake_id, reuse the active resource instead
+    of creating glue_db_2/glue_db_3 duplicates.
+    """
+    if not config:
+        return None
+
+    raw_intake = initial_fields.get("intake_id")
+    if raw_intake is None or str(raw_intake).strip() == "":
+        return None
+
+    normalized_intake = _normalize_initial_field("intake_id", raw_intake, config)
+    active_statuses = {ResourceStatus.COLLECTING, ResourceStatus.CONFIRMING, ResourceStatus.REVIEWING}
+
+    for resource in session.resources:
+        if resource.resource_type != resource_type:
+            continue
+        if resource.status not in active_statuses:
+            continue
+        existing_intake = resource.collected_fields.get("intake_id")
+        if existing_intake is not None and str(existing_intake).strip().lower() == str(normalized_intake).strip().lower():
+            return resource
+
+    return None
+
+
 async def _validate_initial_field_external(field_name: str, value: Any) -> tuple[bool, str | None, dict | None]:
     """Run external/pre-store validation for initial_fields that need it."""
     if field_name != "intake_id":
@@ -295,37 +427,31 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
             continue
 
         config = _load_resource_config(rtype)
-        missing_pre_validations = []
+        required_pre_validations = _required_pre_validations(rtype, config)
         validation_details = []
-        for check in _required_pre_validations(rtype, config):
+        for check in required_pre_validations:
             check_type = check.get("type")
             if check_type == "data_owner_approval":
-                if session_fields.get(_approval_key(rtype, check_type)) != "true":
-                    missing_pre_validations.append(check_type)
-                    validation_details.append(check)
-
-        if missing_pre_validations:
-            blocked.append({
-                "resource_type": rtype,
-                "missing_pre_validations": missing_pre_validations,
-                "required_tool": "validate_data_owner_approval_document",
-                "validation_details": validation_details,
-                "message": f"{rtype} requires data owner approval before it can be created.",
-            })
-            continue
-
-        rid = session.next_resource_id(rtype)
-        resource = Resource(resource_id=rid, resource_type=rtype)
-        session.resources.append(resource)
+                validation_details.append(check)
 
         # 1. Apply initial_fields from user's message (highest priority)
         initial = spec.get("initial_fields") or {}
+        existing_resource = _find_existing_active_resource(session, rtype, initial, config)
+        reused_existing = existing_resource is not None
+        if reused_existing:
+            resource = existing_resource
+            rid = resource.resource_id
+        else:
+            rid = session.next_resource_id(rtype)
+            resource = Resource(resource_id=rid, resource_type=rtype)
+            session.resources.append(resource)
+
         valid_fields = {fs["name"] for fs in config.get("collect_fields", [])} if config else set()
         applied_initial = {}
         initial_field_errors = {}
         initial_validation_details = {}
         for k, v in initial.items():
-            if k in valid_fields and v:
+            if k in valid_fields and v and resource.collected_fields.get(k) in (None, ""):
                 # Normalize value
                 normalized = _normalize_initial_field(k, v, config)
                 # Validate against options
@@ -346,9 +472,16 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
         # 2. Prefill remaining fields from session history (won't overwrite initial_fields)
         prefilled = _prefill_from_session(session, resource)
 
+        missing_pre_validations = []
+        for check in required_pre_validations:
+            check_type = check.get("type")
+            if check_type == "data_owner_approval":
+                if session_fields.get(_resource_approval_key(resource.resource_id, check_type)) != "true":
+                    missing_pre_validations.append(check_type)
+
         # 3. Check if all required fields are now present → auto-derive
         auto_derived = None
-        if config and _all_required_present(resource, config):
+        if config and not missing_pre_validations and _all_required_present(resource, config):
             derive_result = await derive_fields(resource_id=rid)
             try:
                 auto_derived = json.loads(derive_result)
@@ -361,6 +494,9 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
             "resource_type": rtype,
             "status": resource.status.value,
         }
+        if reused_existing:
+            entry["reused_existing"] = True
+            entry["message"] = "Existing active resource reused; no duplicate resource was created."
         if applied_initial:
             entry["initial_fields_set"] = applied_initial
         if initial_field_errors:
@@ -371,24 +507,17 @@ async def create_resources(resources: list[dict], **kwargs) -> str:
             entry["prefilled_fields"] = prefilled
         if auto_derived:
             entry["auto_derived"] = auto_derived
+        if missing_pre_validations and config and _all_required_present(resource, config):
+            entry["pre_validation_pending_after_collection"] = missing_pre_validations
         created.append(entry)
 
     result: dict[str, Any] = {"created": created}
     if errors:
         result["errors"] = errors
-    if blocked:
-        result["blocked_by_pre_validation"] = blocked
-        result["next_action"] = "Ask the user to upload data owner approval evidence, call validate_data_owner_approval_document for the blocked resource_types, then retry create_resources for those resources. Continue normally with any created resources."
-        pending_resource_types = sorted({item["resource_type"] for item in blocked})
-        await save_session_field(
-            session.session_id,
-            _pending_approval_key("data_owner_approval"),
-            json.dumps({
-                "validation_type": "data_owner_approval",
-                "resource_types": pending_resource_types,
-                "blocked": blocked,
-            }),
-        )
+    pending_approval = await _stage_pending_approval_if_collection_complete(session)
+    if pending_approval:
+        result["blocked_by_pre_validation"] = pending_approval.get("blocked", [])
+        result["next_action"] = "All required fields are collected. Ask the user to upload data owner approval evidence for the pending resource targets, call validate_data_owner_approval_document with exact resource_ids, then continue to confirmation. Do not create duplicate resources."
     return json.dumps(result)
 
 
@@ -402,7 +531,43 @@ async def drop_resource(resource_id: str, **kwargs) -> str:
 
     resource.status = ResourceStatus.DROPPED
     await save_resource(session.session_id, resource)
-    return json.dumps({"dropped": resource.resource_id})
+
+    pending_key = _pending_approval_key("data_owner_approval")
+    session_fields = await load_session_fields(session.session_id)
+    pending_raw = session_fields.get(pending_key)
+    pending_updated = False
+    if pending_raw:
+        try:
+            pending = json.loads(pending_raw)
+        except json.JSONDecodeError:
+            pending = None
+        if isinstance(pending, dict):
+            blocked = [item for item in pending.get("blocked", []) if isinstance(item, dict)]
+            if blocked:
+                remaining_blocked = [item for item in blocked if item.get("resource_id") != resource.resource_id]
+                pending_updated = len(remaining_blocked) != len(blocked)
+                if pending_updated:
+                    if remaining_blocked:
+                        pending["blocked"] = remaining_blocked
+                        pending["resource_types"] = sorted({
+                            str(item.get("resource_type", "")).strip().lower()
+                            for item in remaining_blocked
+                            if item.get("resource_type")
+                        })
+                        pending["resource_ids"] = [item.get("resource_id") for item in remaining_blocked if item.get("resource_id")]
+                        pending["pending_targets"] = [
+                            {
+                                "resource_id": item.get("resource_id"),
+                                "resource_type": item.get("resource_type"),
+                                "intake_id": item.get("intake_id"),
+                            }
+                            for item in remaining_blocked
+                        ]
+                        await save_session_field(session.session_id, pending_key, json.dumps(pending))
+                    else:
+                        await save_session_field(session.session_id, pending_key, "")
+
+    return json.dumps({"dropped": resource.resource_id, "pending_approval_updated": pending_updated})
 
 
 async def clone_resource(source_resource_id: str, overrides: dict | None = None, **kwargs) -> str:

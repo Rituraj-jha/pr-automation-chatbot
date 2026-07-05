@@ -1,0 +1,49 @@
+# MIW repository directory map
+# Used by repo-aware tools to resolve where generated resource YAML files live.
+
+repo:
+  # Local mock path is relative to backend_v3/.
+  local_mock_root: "../miw-repo/miw-object-provisioning"
+  # Path root inside the GitHub repository. The upstream GitHub repo is the
+  # miw-object-provisioning repo itself, so resource paths start at aws_lakehouse/.
+  github_root: ""
+  default_branch: "main"
+
+existence_check:
+  enabled: true
+  # Check the upstream GitHub repo configured in .env:
+  # GITHUB_ENTERPRISE_URL, GITHUB_UPSTREAM_OWNER, GITHUB_UPSTREAM_REPO, GITHUB_UPSTREAM_BRANCH.
+  source: github
+  allowed_path_prefixes:
+    - "aws_lakehouse/"
+    - "miw-object-provisioning/aws_lakehouse/"
+    - "miw-repo/miw-object-provisioning/aws_lakehouse/"
+  accepted_extensions:
+    - ".yaml"
+    - ".yml"
+
+platforms:
+  aws_lakehouse:
+    root: "aws_lakehouse"
+
+account_folders:
+  lakehouse:
+    folder: "lakehouse-001"
+  compute:
+    folder_pattern: "compute-{compute_number:03d}"
+
+resource_folders:
+  s3: "s3"
+  glue_db: "glue_db"
+  iam: "iam"
+
+file_naming:
+  s3:
+    name_field: bucket_name
+    extension: ".yaml"
+  glue_db:
+    name_field: database_name
+    extension: ".yaml"
+  iam:
+    name_field: role_name
+    extension: ".yaml"

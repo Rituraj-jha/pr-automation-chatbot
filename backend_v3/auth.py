@@ -28,14 +28,25 @@ CA_BUNDLE = os.getenv("CUSTOM_CA_BUNDLE_PATH") or True
 GITHUB_WEB = GITHUB_ENTERPRISE_URL if GITHUB_ENTERPRISE_URL else "https://github.com"
 GITHUB_API = f"{GITHUB_ENTERPRISE_URL}/api/v3" if GITHUB_ENTERPRISE_URL else "https://api.github.com"
 
+# Allowed redirect origins for return_to parameter
+ALLOWED_REDIRECT_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+]
+
 # In-memory CSRF state store
 _oauth_states: dict[str, dict] = {}
 
 
-def get_auth_url() -> str:
+def get_auth_url(return_to: str | None = None) -> str:
     """Generate GitHub OAuth authorization URL with CSRF state."""
     state = secrets.token_urlsafe(32)
-    _oauth_states[state] = {"created_at": datetime.now(timezone.utc)}
+    _oauth_states[state] = {
+        "created_at": datetime.now(timezone.utc),
+        "return_to": return_to,
+    }
 
     params = urlencode({
         "client_id": GITHUB_CLIENT_ID,
@@ -45,12 +56,17 @@ def get_auth_url() -> str:
     return f"{GITHUB_WEB}/login/oauth/authorize?{params}"
 
 
+def pop_state(state: str) -> dict | None:
+    """Pop and return stored state dict, or None if invalid."""
+    return _oauth_states.pop(state, None)
+
+
 async def exchange_code(code: str, state: str | None = None) -> str:
-    """Exchange authorization code for access token."""
-    if state and state not in _oauth_states:
-        raise ValueError("Invalid OAuth state (CSRF check failed)")
-    if state:
-        del _oauth_states[state]
+    """Exchange authorization code for access token.
+
+    Note: state validation/pop is now handled by pop_state() in the callback
+    before this function is called, so we only do the token exchange here.
+    """
 
     async with httpx.AsyncClient(verify=CA_BUNDLE, timeout=30) as client:
         resp = await client.post(

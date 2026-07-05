@@ -9,8 +9,12 @@ from typing import Any
 import yaml
 
 from models.state import ResourceStatus
-from tools.session_tools import _get_session
-from db.repository import save_resource
+from tools.session_tools import (
+    _get_session,
+    _missing_required_pre_validations,
+    _stage_pending_approval_if_collection_complete,
+)
+from db.repository import load_session_fields, save_resource
 
 _CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 _CONTEXT_DIR = Path(__file__).resolve().parent.parent / "context"
@@ -128,30 +132,30 @@ async def set_fields(resource_id: str, fields: dict, **kwargs) -> str:
     validation_details = {}
     validated_fields = {}
 
-    for field_name, value in fields.items():
-        normalized = _normalize_value(field_name, value, config)
-        field_spec = next(
-            (f for f in config.get("collect_fields", []) if f["name"] == field_name),
-            None,
-        )
+    from tools.validate_tools import validate_collect_fields
 
-        if not field_spec:
-            errors[field_name] = f"'{field_name}' is not a collected field for {resource.resource_type}"
+    pre_store_validation = validate_collect_fields(
+        resource_type=resource.resource_type,
+        current_fields=resource.collected_fields,
+        incoming_fields=fields,
+    )
+
+    field_errors = pre_store_validation.get("field_errors", {}) or {}
+    for field_name, detail in field_errors.items():
+        errors[field_name] = detail.get("message", "Invalid value")
+        validation_details[field_name] = detail
+
+    cross_field_errors = pre_store_validation.get("cross_field_errors", []) or []
+    for index, error in enumerate(cross_field_errors, start=1):
+        errors[f"_cross_field_{index}"] = error
+
+    normalized_candidates = pre_store_validation.get("normalized", {}) or {}
+    if cross_field_errors:
+        normalized_candidates = {}
+
+    for field_name, normalized in normalized_candidates.items():
+        if field_name in field_errors:
             continue
-
-        # Basic validation: check options if defined
-        if field_spec and field_spec.get("options"):
-            option_values = _extract_option_values(field_spec["options"])
-            if normalized not in option_values:
-                errors[field_name] = f"Must be one of: {option_values}"
-                continue
-
-        # Regex validation (e.g. intake_id pattern)
-        if field_spec:
-            validation = field_spec.get("validation")
-            if validation and not re.match(validation, str(normalized)):
-                errors[field_name] = f"Invalid format. Must match pattern: {validation}"
-                continue
 
         external_valid, external_error, external_detail = await _validate_external_field(field_name, normalized)
         if not external_valid:
@@ -211,13 +215,28 @@ async def set_fields(resource_id: str, fields: dict, **kwargs) -> str:
     if validated_fields:
         await save_resource(session.session_id, resource)
 
+    field_collection_complete = all_collected
+    pending_approval = None
+    missing_pre_validations = []
+    if all_collected:
+        session_fields = await load_session_fields(session.session_id)
+        missing_pre_validations, _validation_details = _missing_required_pre_validations(resource, config, session_fields)
+        if missing_pre_validations:
+            pending_approval = await _stage_pending_approval_if_collection_complete(session)
+            all_collected = False
+
     result = {
         "resource_id": resource.resource_id,
         "set": set_fields_result,
         "errors": errors if errors else None,
         "validation_details": validation_details if validation_details else None,
+        "pre_store_validation": pre_store_validation,
+        "field_collection_complete": field_collection_complete,
+        "missing_pre_validations": missing_pre_validations if missing_pre_validations else None,
+        "approval_required": pending_approval,
+        "approval_deferred_until_all_resources_collected": bool(missing_pre_validations and not pending_approval),
         "collection_complete": all_collected,
-        "missing_fields": missing if not all_collected else None,
+        "missing_fields": missing if missing else None,
     }
     return json.dumps({k: v for k, v in result.items() if v is not None})
 
@@ -258,11 +277,12 @@ async def get_resource_info(resource_type: str, **kwargs) -> str:
             "validation": field.get("validation"),
         })
 
-    derived_fields = [
+    derived_fields_after_collection = [
         {
             "name": field.get("name"),
             "label": field.get("label", field.get("name")),
             "editable": field.get("editable", "locked"),
+            "do_not_ask_during_collection": True,
         }
         for field in config.get("derive_fields", [])
     ]
@@ -272,8 +292,9 @@ async def get_resource_info(resource_type: str, **kwargs) -> str:
         "display_name": config.get("display_name", resource_type),
         "skill": context_md,
         "pre_validations": config.get("pre_validations", []),
+        "collection_instruction": "When asking for missing values, ask only collect_fields. Do not ask for derived_fields_after_collection; they are calculated after collection.",
         "collect_fields": collect_fields,
-        "derived_fields": derived_fields,
+        "derived_fields_after_collection": derived_fields_after_collection,
         "file_name_field": config.get("file_name_field"),
     }, indent=2)
 
@@ -339,12 +360,38 @@ async def get_common_fields(resource_types: list[str], **kwargs) -> str:
     if not resource_types:
         return json.dumps({"error": "No resource types provided"})
 
-    # Load configs for each type
+    normalized_types = [str(rt).strip().lower() for rt in resource_types if str(rt).strip()]
+
+    # Load configs for each unique type
     configs: dict[str, dict] = {}
-    for rt in resource_types:
+    for rt in normalized_types:
         config = _load_resource_config(rt)
         if config:
             configs[rt] = config
+
+    # Multiple resources of the same type still have shared/reusable fields.
+    # Previously two Glue DBs collapsed to one config and returned no common
+    # fields, causing the LLM to dump the full Glue form once per resource.
+    if len(normalized_types) > 1 and len(configs) == 1:
+        rt = next(iter(configs.keys()))
+        config = configs[rt]
+        common_fields = []
+        specific_fields = []
+        for field in config.get("collect_fields", []):
+            field_name = field.get("name")
+            if not field_name or field_name == "intake_id":
+                continue
+            if not field.get("required", False):
+                continue
+            if field.get("session_reuse", False):
+                common_fields.append(field_name)
+            else:
+                specific_fields.append(field_name)
+        return json.dumps({
+            "common_fields": sorted(common_fields),
+            "specific_fields": {rt: specific_fields},
+            "instruction": "Ask common_fields once for all active resources. Do not repeat the full field list per resource. After common fields are set, ask specific_fields per resource.",
+        })
 
     if len(configs) < 2:
         # Only one type — everything is "specific"

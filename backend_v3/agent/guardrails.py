@@ -4,22 +4,193 @@ These are NOT prompt-dependent. They run as interceptors in the agent loop,
 ensuring the system behaves correctly regardless of LLM output.
 
 Guardrails (ordered by when they fire):
-  1. Auto-inject state — every turn start
-  2. Auto-derive — after set_fields returns collection_complete
-  3. Auto-review — after generate_yaml succeeds
-  4. Block PR without review — reject create_pr if any resource in REVIEWING
-  5. Session field persistence — after successful set_fields
-  6. Auto-check intake ID — after set_fields stores an intake_id
+    1. Route lock — each session is either create or update route until reset
+    2. Auto-inject state — every turn start
+    3. Auto-derive — after set_fields returns collection_complete
+    4. Auto-review — after generate_yaml succeeds
+    5. Block PR without review — reject create_pr if any resource in REVIEWING
+    6. Session field persistence — after successful set_fields
+    7. Auto-check intake ID — after set_fields stores an intake_id
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from models.state import ResourceStatus
 
 logger = logging.getLogger(__name__)
+
+ACTIVE_ROUTE_KEY = "__active_route"
+_CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+_SUPPORTED_RESOURCE_TERMS: set[str] | None = None
+
+CREATE_ROUTE_TOOLS = {
+    "create_resources",
+    "drop_resource",
+    "clone_resource",
+    "set_fields",
+    "edit_derived_field",
+    "derive_fields",
+    "check_resource_exists",
+    "generate_yaml",
+    "review_yaml",
+    "prepare_pr_intake",
+    "set_pr_intake_answers",
+    "create_pr",
+    "validate_fields",
+}
+
+UPDATE_ROUTE_TOOLS = {
+    "check_update_capability",
+    "fetch_existing_resource_file",
+    "stage_append_only_update",
+    "stage_full_updated_yaml",
+    "validate_append_only_change",
+    "preview_update_diff",
+    "create_update_pr",
+    "review_yaml",
+}
+
+NEUTRAL_TOOLS = {
+    "get_session_state",
+    "get_resource_info",
+    "get_common_fields",
+    "check_intake_id",
+    "validate_data_owner_approval_document",
+    "validate_approval_image",
+    "update_user_profile",
+}
+
+
+def _infer_route_intent(message: str) -> str | None:
+    """Infer create/update intent from a user message."""
+    raw_text = message.lower()
+    text = f" {raw_text} "
+    update_patterns = [
+        r"\bupdate\b", r"\bmodify\b", r"\bedit\b", r"\bappend\b", r"\bpatch\b", r"\brevise\b",
+        r"\bexisting\s+(resource|yaml|file|bucket|database)\b",
+    ]
+    create_terms = [
+        " create ", " provision ", " make ", " add new ", " new resource ",
+        " setup ", " set up ", " generate ", " want ", " need ",
+    ]
+    if any(re.search(pattern, raw_text) for pattern in update_patterns):
+        return "update"
+    if any(term in text for term in create_terms):
+        return "create"
+    if _mentions_supported_resource(raw_text):
+        # Bare resource requests like "s3" or "want s3" are create requests unless
+        # the user explicitly says update/modify/append existing YAML.
+        return "create"
+    return None
+
+
+def _supported_resource_terms() -> set[str]:
+    """Load supported resource aliases for route intent inference."""
+    global _SUPPORTED_RESOURCE_TERMS
+    if _SUPPORTED_RESOURCE_TERMS is not None:
+        return _SUPPORTED_RESOURCE_TERMS
+
+    terms: set[str] = set()
+    settings_path = _CONFIG_DIR / "settings.yaml"
+    if settings_path.exists():
+        data = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+        for item in data.get("supported_resources", []) or []:
+            if not isinstance(item, dict):
+                terms.add(str(item))
+                continue
+            for value in [item.get("type"), item.get("display"), *(item.get("aliases", []) or [])]:
+                if value:
+                    terms.add(str(value))
+    _SUPPORTED_RESOURCE_TERMS = {re.sub(r"[^a-z0-9]+", " ", term.lower()).strip() for term in terms if term}
+    return _SUPPORTED_RESOURCE_TERMS
+
+
+def _mentions_supported_resource(message: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", message.lower()).strip()
+    if not normalized:
+        return False
+    for term in _supported_resource_terms():
+        if term and re.search(rf"\b{re.escape(term)}s?\b", normalized):
+            return True
+    return False
+
+
+def _is_route_reset_message(message: str) -> bool:
+    text = message.lower().strip()
+    return text in {"cancel", "start over", "reset", "new request", "clear route"} or "start over" in text
+
+
+async def guardrail_route_user_message(session, user_message: str) -> str | None:
+    """Lock a session to create or update route and reject cross-route user requests."""
+    from db.repository import load_session_fields, save_session_field
+
+    if _is_route_reset_message(user_message):
+        await save_session_field(session.session_id, ACTIVE_ROUTE_KEY, "")
+        return "I cleared the active route. Tell me if you want to create or update a resource."
+
+    fields = await load_session_fields(session.session_id)
+    current_route = fields.get(ACTIVE_ROUTE_KEY, "").strip()
+    requested_route = _infer_route_intent(user_message)
+
+    if current_route in {"create", "update"}:
+        if requested_route and requested_route != current_route:
+            other = "update" if current_route == "create" else "create"
+            return (
+                f"This chat is currently in {current_route}-resource mode. "
+                f"To {other} a resource, please start a new request or cancel this flow."
+            )
+        return None
+
+    if requested_route in {"create", "update"}:
+        await save_session_field(session.session_id, ACTIVE_ROUTE_KEY, requested_route)
+
+    return None
+
+
+async def guardrail_enforce_route(tool_name: str, tool_args: dict) -> str | None:
+    """Restrict tool usage to the active session route."""
+    if tool_name in NEUTRAL_TOOLS:
+        return None
+
+    from tools.session_tools import _get_session
+    from db.repository import load_session_fields, save_session_field
+
+    session = _get_session()
+    fields = await load_session_fields(session.session_id)
+    current_route = fields.get(ACTIVE_ROUTE_KEY, "").strip()
+
+    if tool_name in CREATE_ROUTE_TOOLS and tool_name in UPDATE_ROUTE_TOOLS:
+        return None
+
+    tool_route = None
+    if tool_name in CREATE_ROUTE_TOOLS:
+        tool_route = "create"
+    elif tool_name in UPDATE_ROUTE_TOOLS:
+        tool_route = "update"
+
+    if not tool_route:
+        return None
+
+    if not current_route:
+        await save_session_field(session.session_id, ACTIVE_ROUTE_KEY, tool_route)
+        current_route = tool_route
+
+    if current_route != tool_route:
+        return json.dumps({
+            "error": f"Tool '{tool_name}' is not allowed in {current_route}-resource mode.",
+            "active_route": current_route,
+            "tool_route": tool_route,
+            "message": f"This session is locked to {current_route}. Start a new request or cancel this flow to switch routes.",
+        })
+
+    return None
 
 
 async def guardrail_auto_inject_state(llm_messages: list[dict]) -> None:
@@ -107,6 +278,13 @@ async def guardrail_auto_review(
         result_data["auto_review"] = review_data
     except json.JSONDecodeError:
         result_data["auto_review"] = review_result
+
+    # Stop signal: tell the LLM to respond to user and NOT continue with PR
+    result_data["instruction"] = (
+        "Resource is now DONE and review passed. "
+        "STOP here — respond to the user saying the resource is ready and they can say 'create PR' when ready. "
+        "Do NOT call create_pr or any other tool in this turn."
+    )
 
     return json.dumps(result_data)
 

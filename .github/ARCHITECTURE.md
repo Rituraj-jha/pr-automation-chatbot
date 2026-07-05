@@ -30,9 +30,10 @@ flowchart TD
     PRE4 -->|No| PRE6[Block — All resources need approval. Ask user to get approval first.]
     PRE5 --> G
     
-    E2 --> ITV[Validate Intake ID — validate_intake_id tool]
-    ITV -->|Pass| G[Extract Initial Fields from Message]
-    ITV -->|Fail| ITV_ERR[Inform: Intake ID invalid/not approved. Ask for valid one.]
+    E2 --> ITV[Collect resource intake_id first]
+    ITV --> ITV2[Validate intake_id per resource via set_fields/check_intake_id]
+    ITV2 -->|Pass| G[Extract Remaining Fields from Message]
+    ITV2 -->|Fail| ITV_ERR[Inform: Intake ID invalid/not approved. Ask for corrected resource intake_id.]
     ITV_ERR --> ITV
 
     G --> H{Validate Extracted Fields}

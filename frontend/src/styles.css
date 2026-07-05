@@ -308,6 +308,40 @@
 	padding: 0;
 }
 
+.sc-update-diff-card {
+	border-color: rgba(99, 102, 241, 0.28);
+}
+
+.sc-update-meta {
+	display: grid;
+	gap: 0.35rem;
+	padding: 0.75rem 1rem;
+	font-size: 0.86rem;
+	color: var(--mw-muted);
+}
+
+.sc-diff-block {
+	margin: 0.75rem 1rem;
+	border: 1px solid var(--mw-border);
+	border-radius: 0.75rem;
+	overflow: hidden;
+	background: #0f172a;
+}
+
+.sc-diff-pre {
+	margin: 0;
+	padding: 0.85rem;
+	overflow-x: auto;
+	font-size: 0.78rem;
+	line-height: 1.45;
+	color: #e5e7eb;
+	white-space: pre-wrap;
+}
+
+.sc-update-branch-row {
+	padding: 0 1rem 0.75rem;
+}
+
 .sc-yaml-textarea {
 	width: 100%;
 	border: none;
@@ -556,100 +590,6 @@
 		min-width: 80px;
 		padding: 8px 12px;
 	}
-}
-
-/* ── Intake Gate ───────────────────────────────────────────── */
-.intake-gate {
-	margin: 0 0 14px;
-	padding: 14px;
-	border: 1px solid var(--mw-border);
-	border-radius: 12px;
-	background: var(--mw-surface);
-	box-shadow: var(--mw-shadow-sm);
-	position: sticky;
-	top: 0;
-	z-index: 4;
-}
-
-.intake-gate-title {
-	font-size: 14px;
-	font-weight: 700;
-	margin-bottom: 10px;
-	color: var(--mw-text);
-}
-
-.intake-gate-row {
-	display: flex;
-	gap: 8px;
-	flex-wrap: wrap;
-}
-
-.intake-gate-input {
-	flex: 1;
-	min-width: 220px;
-	padding: 10px 12px;
-	border: 1px solid var(--mw-border);
-	border-radius: 8px;
-	font-size: 13px;
-	background: var(--mw-bg);
-	color: var(--mw-text);
-	font-family: inherit;
-}
-
-.intake-gate-input:focus {
-	outline: none;
-	border-color: var(--mw-primary);
-	box-shadow: 0 0 0 2px rgba(0, 132, 61, 0.1);
-}
-
-.intake-gate-btn {
-	padding: 10px 14px;
-	border: none;
-	border-radius: 8px;
-	background: var(--mw-primary);
-	color: #fff;
-	font-weight: 600;
-	cursor: pointer;
-}
-
-.intake-gate-btn:disabled {
-	opacity: 0.5;
-	cursor: not-allowed;
-}
-
-.intake-gate-result {
-	margin-top: 10px;
-	padding: 9px 10px;
-	border-radius: 8px;
-	font-size: 12px;
-	line-height: 1.4;
-	border: 1px solid var(--mw-border);
-}
-
-.intake-gate-result.status-approved_and_ready_for_design {
-	background: rgba(0, 132, 61, 0.08);
-	border-color: rgba(0, 132, 61, 0.25);
-	color: var(--mw-primary);
-}
-
-.intake-gate-result.status-valid {
-	background: rgba(217, 119, 6, 0.08);
-	border-color: rgba(217, 119, 6, 0.25);
-	color: #b45309;
-}
-
-.intake-gate-result.status-non_valid {
-	background: rgba(180, 35, 24, 0.08);
-	border-color: rgba(180, 35, 24, 0.25);
-	color: var(--mw-danger);
-}
-
-.intake-demo-ids {
-	margin-top: 10px;
-	font-size: 12px;
-	color: var(--mw-muted);
-	display: grid;
-	gap: 2px;
 }
 
 /* ── Assistant Message Collapse ───────────────────────────── */

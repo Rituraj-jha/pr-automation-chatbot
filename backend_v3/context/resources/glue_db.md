@@ -43,7 +43,8 @@ If a field has options, ask the user to pick one of those exact options.
 ## Pre-Validation
 
 Glue DB may require pre-validation from config.
-If `create_resources` returns `blocked_by_pre_validation`, call the required tool and then retry creation for the blocked resource.
+Data-owner approval is requested after all required Glue DB collect fields are present, immediately before derivation/confirmation.
+If `set_fields` or `create_resources` returns `blocked_by_pre_validation` / `approval_required`, keep using the returned `resource_id` and call the required approval tool with exact `resource_ids`. Do not create duplicate resources after approval.
 Do not hardcode approval behavior in the response; follow the tool result.
 
 ## Multi-Resource Behavior
@@ -79,6 +80,6 @@ Multi-resource example:
 
 ## Error Recovery
 
-- If approval is required, call the required pre-validation tool and retry resource creation after it passes.
+- If approval is required, call the required pre-validation tool and continue toward derivation/confirmation on the existing `resource_id` after it passes. Do not retry `create_resources` just because approval passed.
 - If tool validation rejects a value, show the valid choices returned from config and ask for the corrected field only.
 - If `intake_id_check.valid` is false, ask for a valid approved intake ID and do not proceed to confirmation.

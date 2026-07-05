@@ -34,7 +34,7 @@ collect_fields:
     label: "Intake ID"
     description: "Request tracking ID (e.g. M0000485)"
     group: identity
-    session_reuse: true
+    session_reuse: false
     required: true
     placeholder: "e.g. M021213"
     validation: "^[MI]\\d+$"

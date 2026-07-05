@@ -306,6 +306,78 @@ function YamlPreviewCard({ structured, onSend }) {
 	)
 }
 
+function UpdateDiffCard({ structured, onSend }) {
+	const [updatedYaml, setUpdatedYaml] = useState(structured?.updated_yaml || "")
+	const [targetBranch, setTargetBranch] = useState(structured?.branch || "")
+
+	if (!structured || structured.type !== "update_diff") return null
+
+	const filePath = structured.file_path || "resource.yaml"
+	const diff = structured.diff || ""
+	const appendOnlyValid = Boolean(structured.append_only_valid)
+
+	const handleSubmitEdited = () => {
+		onSend?.(
+			`I edited the proposed update for ${filePath}. Use stage_full_updated_yaml to validate this full updated YAML as append-only and show the diff again:\n\n\`\`\`yaml\n${updatedYaml}\n\`\`\``
+		)
+	}
+
+	const handleCreatePr = () => {
+		const branchText = targetBranch.trim()
+		onSend?.(branchText
+			? `The update diff looks good. Create update PR to branch ${branchText}.`
+			: "The update diff looks good. Create update PR.")
+	}
+
+	return (
+		<div className="sc-card sc-update-diff-card">
+			<div className="sc-header">
+				<span className="sc-icon">🧩</span>
+				<span>Update Diff</span>
+				<span className={`sc-badge ${appendOnlyValid ? "sc-badge-done" : "sc-badge-reviewing"}`}>
+					{appendOnlyValid ? "append-only" : "needs review"}
+				</span>
+			</div>
+			<div className="sc-update-meta">
+				<div><strong>File:</strong> {filePath}</div>
+				<div><strong>Resource:</strong> {(structured.resource_type || "resource").toUpperCase()}</div>
+			</div>
+			<div className="sc-yaml-editor-body">
+				<textarea
+					className="sc-yaml-textarea"
+					value={updatedYaml}
+					onChange={(event) => setUpdatedYaml(event.target.value)}
+					spellCheck={false}
+					rows={Math.max(updatedYaml.split("\n").length + 1, 10)}
+				/>
+			</div>
+			<div className="sc-diff-block">
+				<div className="sc-yaml-block-header">
+					<span>git diff</span>
+				</div>
+				<pre className="sc-diff-pre">{diff}</pre>
+			</div>
+			<div className="sc-update-branch-row">
+				<input
+					type="text"
+					className="sc-text-input"
+					placeholder="Target branch for PR"
+					value={targetBranch}
+					onChange={(event) => setTargetBranch(event.target.value)}
+				/>
+			</div>
+			<div className="sc-actions">
+				<button type="button" className="sc-btn-confirm" onClick={handleCreatePr} disabled={!appendOnlyValid}>
+					Create Update PR
+				</button>
+				<button type="button" className="sc-btn-cancel" onClick={handleSubmitEdited}>
+					Validate Edited YAML
+				</button>
+			</div>
+		</div>
+	)
+}
+
 function ResourcePanel({ resources, onCopyYaml }) {
 	const [expanded, setExpanded] = useState({})
 	if (!resources || !resources.length) return null
@@ -644,7 +716,7 @@ function MessageBubble({ message, isLatest, onOptionClick, approvalRequirements,
 		)
 		&& approvalResourceTypes.length > 0
 	)
-	const hasStructuredHelperUI = structuredType === "field_prompts" || structuredType === "yaml_preview"
+	const hasStructuredHelperUI = structuredType === "field_prompts" || structuredType === "yaml_preview" || structuredType === "update_diff"
 	const hasHelperUI = Boolean(
 		message.role === "assistant"
 		&& isLatest
@@ -724,6 +796,7 @@ function MessageBubble({ message, isLatest, onOptionClick, approvalRequirements,
 				<>
 					<FieldPromptsCard structured={message.structured} onSend={onOptionClick} />
 					<YamlPreviewCard structured={message.structured} onSend={onOptionClick} />
+					<UpdateDiffCard structured={message.structured} onSend={onOptionClick} />
 				</>
 			)}
 
@@ -789,24 +862,16 @@ export default function App() {
 	const [historyMenuId, setHistoryMenuId] = useState(null)
 	const [showTemplates, setShowTemplates] = useState(true)
 	const [sending, setSending] = useState(false)
-	const [intakeId, setIntakeId] = useState("")
-	const [intakeValidation, setIntakeValidation] = useState(null)
-	const [validatingIntake, setValidatingIntake] = useState(false)
-	const [pendingAutoMessage, setPendingAutoMessage] = useState("")
 	const [supportedResources, setSupportedResources] = useState([])
 	const [approvalRequirements, setApprovalRequirements] = useState({})
 	const textareaRef = useRef(null)
 	const threadEndRef = useRef(null)
-	const intakeGateRef = useRef(null)
-	const intakeInputRef = useRef(null)
 	const hasActiveSession = currentChatId !== null
-	const intakeApproved = intakeValidation?.status === "approved_and_ready_for_design"
 
 	const helperText = useMemo(() => {
-		if (!intakeApproved) return "Validate Intake ID to unlock chat."
 		if (hasActiveSession) return "Session started. Continue your conversation below."
 		return "Choose a MINI starter to begin quickly, or start a new chat from the history panel."
-	}, [hasActiveSession, intakeApproved])
+	}, [hasActiveSession])
 
 	useEffect(() => {
 		threadEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
@@ -862,26 +927,8 @@ export default function App() {
 
 		const payload = await api(`/api/chats/${chatId}/messages`, {}, userOverride)
 		const nextMessages = mapMessages(payload || [])
-		let restoredIntake = null
-		try {
-			const intakePayload = await api(`/api/chats/${chatId}/intake`, {}, userOverride)
-			if (intakePayload?.validated) {
-				restoredIntake = {
-					valid: Boolean(intakePayload.valid ?? true),
-					can_start_chat: Boolean(intakePayload.can_start_chat ?? true),
-					status: intakePayload.status || "approved_and_ready_for_design",
-					intake_id: intakePayload.intake_id,
-					message: intakePayload.message || `Intake ID '${intakePayload.intake_id}' is already validated for this session.`,
-					restored: true,
-				}
-			}
-		} catch {
-			restoredIntake = null
-		}
 		setCurrentChatId(String(chatId))
 		setMessages(nextMessages)
-		setIntakeValidation(restoredIntake)
-		setIntakeId("")
 		setShowTemplates(nextMessages.length === 0)
 		setErrorText("")
 	}, [api, mapMessages])
@@ -979,13 +1026,9 @@ export default function App() {
 			setCurrentChatId(String(chat.id))
 			setMessages([])
 			setDraft("")
-			setIntakeValidation(null)
-			setIntakeId("")
-			setPendingAutoMessage("")
 			setShowTemplates(true)
 			setHistoryMenuId(null)
 			if (textareaRef.current) textareaRef.current.style.height = "auto"
-			requestAnimationFrame(() => intakeInputRef.current?.focus())
 		} catch (error) {
 			setErrorText(error.message)
 		}
@@ -1026,9 +1069,6 @@ export default function App() {
 		setHistoryMenuId(null)
 		setAuthError("")
 		setErrorText("")
-		setIntakeId("")
-		setIntakeValidation(null)
-		setValidatingIntake(false)
 	}, [])
 
 	const uploadApprovalDocument = useCallback(async (payload) => {
@@ -1039,67 +1079,12 @@ export default function App() {
 	}, [api])
 
 	const useStarterPrompt = useCallback(async (prompt) => {
-		if (!intakeApproved) {
-			setErrorText("Validate an Intake ID with status 'approved_and_ready_for_design' before starting chat.")
-			intakeGateRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
-			requestAnimationFrame(() => intakeInputRef.current?.focus())
-			return
-		}
 		if (!currentChatId) {
 			await startNewChat()
 		}
 		setDraft(prompt)
 		requestAnimationFrame(() => textareaRef.current?.focus())
-	}, [currentChatId, startNewChat, intakeApproved])
-
-	const validateIntake = useCallback(async () => {
-		const value = intakeId.trim()
-		if (!value || validatingIntake) return
-
-		try {
-			setErrorText("")
-			setValidatingIntake(true)
-			let workingChatId = currentChatId
-			if (!workingChatId) {
-				const chat = await api("/api/chats", { method: "POST" })
-				workingChatId = String(chat.id)
-				setChats((current) => [chat, ...current])
-				setCurrentChatId(workingChatId)
-				setMessages([])
-				setShowTemplates(true)
-			}
-			const payload = await api("/api/intake/validate", {
-				method: "POST",
-				body: JSON.stringify({ intake_id: value, session_id: workingChatId }),
-			})
-			setIntakeValidation(payload)
-
-			if (payload?.status === "approved_and_ready_for_design") {
-				const approvedIntakeId = (payload?.intake_id || value).toUpperCase()
-				const intakeLine = `intake_id: ${approvedIntakeId}`
-				setDraft((current) => {
-					const trimmedCurrent = (current || "").trim()
-					if (!trimmedCurrent) return intakeLine
-					if (trimmedCurrent.toUpperCase().includes(approvedIntakeId)) return current
-					return `${current}\n${intakeLine}`
-				})
-				setPendingAutoMessage(intakeLine)
-				setIntakeId("")
-				requestAnimationFrame(() => {
-					if (textareaRef.current) {
-						textareaRef.current.style.height = "auto"
-						textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 180)}px`
-						textareaRef.current.focus()
-					}
-				})
-			}
-		} catch (error) {
-			setErrorText(error.message)
-			setIntakeValidation(null)
-		} finally {
-			setValidatingIntake(false)
-		}
-	}, [api, currentChatId, intakeId, validatingIntake])
+	}, [currentChatId, startNewChat])
 
 	const updateComposerHeight = useCallback((value) => {
 		setDraft(value)
@@ -1110,12 +1095,6 @@ export default function App() {
 
 	const sendMessage = useCallback(async (eventOrText) => {
 		if (eventOrText?.preventDefault) eventOrText.preventDefault()
-		if (!intakeApproved) {
-			setErrorText("Validate an Intake ID with status 'approved_and_ready_for_design' before chatting.")
-			intakeGateRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
-			requestAnimationFrame(() => intakeInputRef.current?.focus())
-			return
-		}
 		const text = typeof eventOrText === "string" ? eventOrText : draft
 		const trimmed = text.trim()
 		if (!trimmed || sending) return
@@ -1183,14 +1162,7 @@ export default function App() {
 		} finally {
 			setSending(false)
 		}
-	}, [api, currentChatId, draft, sending, intakeApproved, supportedResources])
-
-	useEffect(() => {
-		if (!pendingAutoMessage || sending || !intakeApproved) return
-		const nextMessage = pendingAutoMessage
-		setPendingAutoMessage("")
-		void sendMessage(nextMessage)
-	}, [pendingAutoMessage, sending, intakeApproved, sendMessage])
+	}, [api, currentChatId, draft, sending, supportedResources])
 
 	if (isLoading) {
 		return (
@@ -1313,53 +1285,11 @@ export default function App() {
 							<p>{helperText}</p>
 						</header>
 
-						{!intakeApproved && (
-							<section className="intake-gate" aria-label="Intake validation gate" ref={intakeGateRef}>
-								<div className="intake-gate-title">Intake Validation</div>
-								<div className="intake-gate-row">
-									<input
-										ref={intakeInputRef}
-										type="text"
-										className="intake-gate-input"
-										placeholder="Enter Intake ID (e.g. M0000485)"
-										value={intakeId}
-										onChange={(event) => setIntakeId(event.target.value.toUpperCase())}
-										onKeyDown={(event) => {
-											if (event.key === "Enter") {
-												event.preventDefault()
-												validateIntake()
-											}
-										}}
-										disabled={validatingIntake}
-									/>
-									<button
-										type="button"
-										className="intake-gate-btn"
-										onClick={validateIntake}
-										disabled={validatingIntake || !intakeId.trim()}
-									>
-										{validatingIntake ? "Validating..." : "Validate Intake ID"}
-									</button>
-								</div>
-								{intakeValidation && (
-									<div className={`intake-gate-result status-${intakeValidation.status}`}>
-										<strong>Status:</strong> {intakeValidation.status} — {intakeValidation.message}
-									</div>
-								)}
-								<div className="intake-demo-ids">
-									<span><strong>Demo IDs:</strong></span>
-									<span>approved_and_ready_for_design: M0000485, I0000200</span>
-									<span>valid: M0002001, I0000300</span>
-									<span>non_valid: M0099999, I0099999</span>
-								</div>
-							</section>
-						)}
-
 						{errorText && <div className="error-banner">{errorText}</div>}
 
 						<section className="starter-grid" aria-label="MINI starters">
 							{showTemplates && STARTER_CARDS.map((card) => (
-								<button key={card.id} type="button" className="starter-card" onClick={() => useStarterPrompt(card.prompt)} disabled={!intakeApproved}>
+								<button key={card.id} type="button" className="starter-card" onClick={() => useStarterPrompt(card.prompt)}>
 									<span className="starter-tag">Starter</span>
 									<h3>{card.title}</h3>
 									<p>{card.description}</p>
@@ -1384,7 +1314,7 @@ export default function App() {
 										onOptionClick={sendMessage}
 										approvalRequirements={approvalRequirements}
 										currentChatId={currentChatId}
-										intakeId={intakeValidation?.intake_id}
+										intakeId={null}
 										onValidateApprovalUpload={uploadApprovalDocument}
 									/>
 								))
@@ -1408,17 +1338,16 @@ export default function App() {
 								ref={textareaRef}
 								value={draft}
 								onChange={(event) => updateComposerHeight(event.target.value)}
-								disabled={!intakeApproved}
 								onKeyDown={(event) => {
 									if (event.key === "Enter" && !event.shiftKey) {
 										event.preventDefault()
 										sendMessage()
 									}
 								}}
-								placeholder={intakeApproved ? "Start a new conversation..." : "Validate Intake ID to start chatting..."}
+								placeholder="Start a new conversation..."
 								rows={2}
 							/>
-							<button type="submit" aria-label="Send message" className="send-btn" disabled={sending || !draft.trim() || !intakeApproved}>
+							<button type="submit" aria-label="Send message" className="send-btn" disabled={sending || !draft.trim()}>
 								<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" width="20" height="20">
 									<path d="M22 2L11 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
 									<path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
