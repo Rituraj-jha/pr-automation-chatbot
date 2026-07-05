@@ -1,9 +1,0 @@
-{
-  "snowflake_account_id": "cargill-miw_prod",
-  "network_policy_name": "astronomer_network_policy",
-  "description": "Network rule to allow astronomer  vpceid to access snowflake instance",
-  "sub_uuid": ["0ecacc98-903b-4c46-a725-fb98a0e05aee","eb7bc8ff-a15f-492b-94a1-c4565c1ea3b1"],
-  "type":"AWSVPCEID",
-  "mode":"INGRESS",
-  "value_list": ["vpce-0b68a06f5149b685a"]
-}

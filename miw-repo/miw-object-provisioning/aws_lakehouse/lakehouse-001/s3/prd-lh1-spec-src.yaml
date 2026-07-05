@@ -1,8 +1,0 @@
-intake_id: M0000501
-bucket_name: prd-lh1-spec-src
-bucket_description: "Stores Source system specific data for Specialized Portfolio"
-aws_account_id: 578647603827
-aws_region: us-east-1
-usage_type: Source
-enterprise_or_func_name: SPEC
-enterprise_or_func_subgrp_name: ""

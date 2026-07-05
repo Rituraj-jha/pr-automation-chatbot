@@ -1,9 +1,0 @@
-intake_id: M0000449
-bucket_name: prd-lh1-corp-fin-scripts
-bucket_description: "For storing PySpark scripts for CORP FIN subgroup"
-aws_account_id: '578647603827'
-aws_region: us-east-1
-usage_type: Scripts
-enterprise_or_func_name: "CORP"
-enterprise_or_func_subgrp_name: "FIN"
-versioning_enabled: true

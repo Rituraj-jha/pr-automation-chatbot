@@ -1,8 +1,0 @@
-intake_id: M0000742
-bucket_name: prd-cmp1-latam-dp
-bucket_description: Stores Curated and Serving Data for AGTR LATAM
-aws_account_id: '367241115350'
-aws_region: us-east-1
-usage_type: DataProduct
-enterprise_or_func_name: AGTR
-enterprise_or_func_subgrp_name: LATAM

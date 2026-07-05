@@ -1,8 +1,0 @@
-intake_id: M0000908
-bucket_name: prd-lh1-corp-fsqr-src
-bucket_description: Stores data for Corporate Functions - CONC & GRAINS
-aws_account_id: 578647603827
-aws_region: us-east-1
-usage_type: Source
-enterprise_or_func_name: CORP
-enterprise_or_func_subgrp_name: FSQR

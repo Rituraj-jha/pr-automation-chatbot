@@ -1,9 +1,0 @@
-{
-  "snowflake_account_id": "cargill-miw_prod",
-  "network_policy_name": "confluent_network_policy",
-  "description": "Network rule to allow confluent vpceid to access snowflake instance",
-  "sub_uuid": ["857f329f-6b2d-4d47-bd87-94ab921427c1","fc8e15f8-5c4e-4803-bab0-ccba90c9baad"],
-  "type":"AWSVPCEID",
-  "mode":"INGRESS",
-  "value_list": ["vpce-0dd0c03d3a806f573"]
-}

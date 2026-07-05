@@ -1,8 +1,0 @@
-intake_id: M0000719
-bucket_name: prd-lh1-food-src
-bucket_description: "Stores data for FOOD FS APAC"
-aws_account_id: 578647603827
-aws_region: us-east-1
-usage_type: Source
-enterprise_or_func_name: "FOOD"
-enterprise_or_func_subgrp_name: 
