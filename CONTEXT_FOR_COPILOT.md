@@ -1,281 +1,630 @@
-# Project Context — PR Automation Chatbot (MiNi)
+# Copilot Handoff Context — PR Automation Chatbot / MiNi
 
-> This document provides full context for continuing development with a new Copilot session.
+> Prepared for another team member's Copilot session. Current date: 2026-07-05.
 
----
-
-## 1. Project Overview
-
-**MiNi** is a conversational AI chatbot that provisions AWS infrastructure (S3 Buckets, Glue Databases) through natural language. It collects user inputs, derives calculated fields, generates validated YAML configs, and commits them as Pull Requests to GitHub Enterprise.
-
-**Tech Stack:**
-- **Backend**: FastAPI (Python 3.11+), SQLite, OpenAI-compatible LLM (function calling)
-- **Frontend**: React + Vite (port 5173)
-- **LLM**: Azure OpenAI / TrueFoundry endpoint (GPT-4o class)
-- **Branch**: `pr_creation`
+This document summarizes the full working context from the recent Copilot chat: what was requested, what was implemented, which files matter, what tests were run, what still needs work, and how the next person should continue.
 
 ---
 
-## 2. Directory Structure (Active Code)
+## 1. Project Snapshot
 
-The active backend is `backend_v3/` (not `backend/` or `backend_wlg/` — those are older iterations).
+**MiNi** is a conversational AI assistant for infrastructure provisioning. Users request resources such as S3 Buckets and Glue Databases in natural language. The backend collects required fields, derives computed values, generates YAML, validates/reviews it, and creates GitHub Enterprise Pull Requests.
 
-```
-backend_v3/
-├── api.py                      # FastAPI endpoints, structured response builder
-├── auth.py                     # Auth middleware
-├── console.py                  # CLI chat interface for testing
-├── requirements.txt
-├── agent/
-│   ├── context_builder.py      # Assembles system prompt + dynamic context
-│   ├── guardrails.py           # 6 code-enforced rules (NOT prompt-driven)
-│   └── loop.py                 # Main agent loop (LLM ↔ tools)
-├── config/
-│   ├── settings.yaml           # Supported resources, aliases, intake validation config
-│   ├── accounts.yaml           # Account directory mapping
-│   ├── pr_template.yaml        # PR description template
-│   ├── resources/
-│   │   ├── s3.yaml             # S3 field definitions, derivation rules, normalize maps
-│   │   └── glue_db.yaml        # Glue DB field definitions, derivation rules
-│   └── validations/
-│       └── dependent_fields.yaml
-├── context/
-│   ├── system.md               # Global system prompt (~100 lines, concise)
-│   ├── review_rules.md         # Reviewer validation rules
-│   └── resources/
-│       ├── s3.md               # Skill file — behavioral guidance (NOT field list)
-│       └── glue_db.md          # Skill file — behavioral guidance (NOT field list)
-├── db/
-│   ├── connection.py           # SQLite async connection management
-│   ├── repository.py           # CRUD: sessions, resources, messages, session_fields
-│   └── schema.sql              # Table definitions
-├── models/
-│   └── state.py                # Session, Resource, Message, Preference dataclasses
-├── services/
-│   └── llm.py                  # OpenAI-compatible API wrapper
-└── tools/
-    ├── registry.py             # Tool function map + OpenAI tool schemas (17 tools)
-    ├── field_tools.py          # set_fields, get_resource_info, get_common_fields
-    ├── session_tools.py        # create_resources, drop_resource, clone_resource, get_session_state
-    ├── derive_tools.py         # derive_fields (auto-calculates from collected)
-    ├── generate_tools.py       # generate_yaml (produces YAML from all_fields)
-    ├── validate_tools.py       # validate_fields (regex/option checks)
-    ├── reviewer_tools.py       # review_yaml (mock — always passes, moves to DONE)
-    ├── intake_tools.py         # check_intake_id (mock list), validate_approval_image (mock)
-    ├── pr_tools.py             # create_pr (GitHub Enterprise API)
-    └── preference_tools.py     # update_user_profile
-```
+**Active implementation:** `backend_v3/` is the main backend for the current work. Older folders such as `backend/`, `backend_v2/`, and `backend_wlg/` are historical/experimental unless explicitly referenced.
+
+**Frontend:** `frontend/` is the main React/Vite UI. `frontend_v2/` contains debug/experimental UI work.
+
+**Important repo paths:**
+- `backend_v3/agent/` — LLM loop, context builder, guardrails.
+- `backend_v3/tools/` — tool implementations used by the LLM.
+- `backend_v3/config/` — resource configs, PR template, repo mapping, update capabilities.
+- `backend_v3/context/` — system prompt and route/resource skills.
+- `frontend/` and `frontend_v2/` — UI clients.
+- `miw-repo/` — local/mock MIW repository area used by repo lookup tooling.
 
 ---
 
-## 3. State Machine
+## 2. User's Main Requests in This Chat
 
-```
-COLLECTING → CONFIRMING → REVIEWING → DONE
-                                          ↓
-                                      (PR creation when ≥1 DONE resource)
-```
+The user wanted the assistant to fix and improve the create/PR workflow:
 
-- **COLLECTING**: Fields being gathered from user
-- **CONFIRMING**: All fields collected + derived → YAML preview shown → user confirms
-- **REVIEWING**: YAML generated → auto-reviewer runs (currently mock, always passes)
-- **DONE**: Ready for PR
-- **DROPPED**: User cancelled this resource
+1. **Add PR-intake gating before PR creation**
+   - `create_pr` must not run until required PR-template answers are collected.
+   - Safe values should auto-fill from completed resources when possible.
+   - Missing PR metadata should be asked in a controlled way.
 
-Transitions are code-enforced (not LLM-decided):
-- `set_fields` → checks `collection_complete` → guardrail auto-derives → status moves to CONFIRMING
-- `generate_yaml` → status stays CONFIRMING (reviewer guardrail fires next)
-- `review_yaml` → moves to DONE (or back to COLLECTING if issues found)
+2. **Auto-fill PR template and PR labels**
+   - Use resource/session state to derive objective, intake approval, labels like environment/enterprise/subgroup, etc.
+   - Ask only missing items such as consumers, PII, Wave, Team, and target branch.
 
----
+3. **Separate create and update flows**
+   - A bare request such as `want s3` or `s3` must be treated as create flow.
+   - Create flow must not ask update-only values such as `branch`, `file_path`, or `resource_name`.
+   - Update flow should only start when the user explicitly says update/modify/edit/append an existing resource/file.
 
-## 4. Architecture Decisions Made in This Session
+4. **Route lock and prompt filtering**
+   - Each chat session should lock to either `create` or `update` route.
+   - The LLM prompt should only include relevant route guidance after route lock.
 
-### 4.1 Config-Driven (Not Prompt-Driven)
-- Resource field definitions, options, normalize maps, derivation rules all live in `config/resources/*.yaml`
-- The system prompt and skill files reference config as source of truth — they don't enumerate values
-- `get_resource_info` tool returns structured JSON with field metadata (options, regex, normalize maps)
-- Pre-validation gates defined per-resource in config (`pre_validations` array)
+5. **Improve collection behavior**
+   - Intake ID first.
+   - Approval requested only at the right time.
+   - No duplicate resources on retry after approval.
+   - Do not expose internal backend/tool details in normal user prompts.
 
-### 4.2 Guardrails (Code-Enforced, Not LLM-Dependent)
-Six guardrails fire automatically in the agent loop:
-1. **Auto-inject state** — injects fresh session state at turn start
-2. **Auto-derive** — after `set_fields` returns `collection_complete`, triggers `derive_fields`
-3. **Auto-review** — after `generate_yaml`, triggers `review_yaml`
-4. **Block PR without review** — rejects `create_pr` if any resource in REVIEWING
-5. **Session field persistence** — saves fields to `session_fields` table for cross-resource reuse
-6. **Auto-check intake ID** — validates intake_id after storage (partially redundant now)
-
-### 4.3 Pre-Store Validation (Key Fix)
-- **Problem**: Invalid values (e.g., wrong intake_id) were being stored to state first, then flagged after. This caused YAML preview to appear with invalid data.
-- **Solution**: `set_fields` and `create_resources` now validate externally BEFORE mutating state.
-- **Implementation**: `_validate_external_field()` in `field_tools.py` and `_validate_initial_field_external()` in `session_tools.py` check intake_id against the external API (mock list) before writing to `resource.collected_fields`.
-- Invalid fields are returned in an `errors` dict and never stored.
-
-### 4.4 Dynamic Supported Resources
-- `context_builder.py` reads `config/settings.yaml` to build the supported resources section dynamically
-- No hardcoded resource lists in prompts
-- Alias resolution (`bucket` → `s3`, `database` → `glue_db`) via settings
-
-### 4.5 Multi-Resource Common-Field-First Flow
-- When user requests multiple resources (e.g., "S3 + Glue DB"), the LLM asks for **common fields first** (plat_env, intake_id, enterprise names) then resource-specific fields
-- YAML preview only shown when ALL active resources reach CONFIRMING
-- `api.py` `_build_structured_data` enforces this wait
-
-### 4.6 Concise Response Style
-- System prompt enforces: max 2-3 sentences, list format for options, no recap of what was just done
-- Skill files are behavioral guides (what to ask, how to normalize) not reference manuals
+6. **Create a handoff/context summary**
+   - This file is the requested summary for another team member's Copilot context.
 
 ---
 
-## 5. Key Files to Understand
+## 3. Current Architecture
 
-### `tools/field_tools.py`
-- `set_fields(resource_id, fields)` — validates options, regex, external checks → stores only valid fields → returns `{set: {...}, errors: {...}, collection_complete: bool}`
-- `get_resource_info(resource_type)` — returns full field metadata as structured JSON (labels, options with descriptions, normalize maps, regex patterns, dependency info)
-- `get_common_fields(resource_types)` — finds fields shared across requested types
+### 3.1 Backend stack
 
-### `tools/session_tools.py`
-- `create_resources(resources_list)` — resolves aliases, checks pre-validation gates (e.g., data_owner_approval), validates initial_fields externally, creates Resource objects
-- `bind_session(session)` — module-level binding for current session (called by API per request)
-- `_get_session()` — returns current bound session
+- Python FastAPI backend in `backend_v3/`.
+- SQLite persistence for sessions, messages, resources, and session fields.
+- OpenAI-compatible function/tool calling through `backend_v3/services/llm.py`.
+- GitHub Enterprise PR operations via `httpx` in PR/repo tools.
 
-### `tools/intake_tools.py`
-- `check_intake_id(intake_id)` — mock: checks against `APPROVED_INTAKE_IDS` list
-- `validate_approval_image(image_url)` — mock: always returns approved, persists to session_fields
-- **TODO**: Replace with real Power BI API call and LLM vision respectively
+### 3.2 LLM control pattern
 
-### `tools/derive_tools.py`
-- `derive_fields(resource_id)` — reads derivation rules from config, computes derived field values from collected fields (e.g., `bucket_name` derived from plat_env + enterprise + usage_type)
+MiNi uses a hybrid design:
 
-### `agent/loop.py`
-- Runs the full agent turn: inject state → LLM call → process tool calls → apply guardrails → repeat until LLM returns text
-- Imports all guardrails and executes them in sequence
+- **Prompts guide UX.**
+  - `backend_v3/context/system.md`
+  - `backend_v3/context/skills/create_resource.md`
+  - `backend_v3/context/skills/update_resource.md`
+  - `backend_v3/context/resources/*.md`
 
-### `api.py`
-- `/chat` endpoint: receives user message, loads/creates session, runs agent turn, returns structured response
-- `_build_structured_data()`: builds sidebar data (fields table, YAML preview, resource cards) from session state
-- YAML preview only included when all active resources are CONFIRMING or beyond
+- **Code guardrails enforce correctness.**
+  - `backend_v3/agent/guardrails.py`
+  - `backend_v3/agent/loop.py`
 
----
+- **Config is source of truth.**
+  - `backend_v3/config/resources/s3.yaml`
+  - `backend_v3/config/resources/glue_db.yaml`
+  - `backend_v3/config/pr_template.yaml`
+  - `backend_v3/config/update_capabilities.yaml`
+  - `backend_v3/config/repo_directory_map.yaml`
 
-## 6. Config Files
+### 3.3 Resource lifecycle
 
-### `config/settings.yaml`
-```yaml
-supported_resources:
-  - type: s3
-    display: "S3 Bucket"
-    aliases: [bucket, s3 bucket, storage, s3, object storage]
-  - type: glue_db
-    display: "Glue Database"
-    aliases: [database, glue database, gluedb, glue db, catalog]
+Resource creation generally follows:
 
-intake_validation:
-  enabled: true
-  format_regex: "^[MI]\\d+$"
-  external_api: null
-  allow_proceed_on_not_found: true
+```text
+COLLECTING -> CONFIRMING -> REVIEWING -> DONE -> PR intake -> create PR
 ```
 
-### `config/resources/s3.yaml` (pattern — glue_db.yaml follows same structure)
-```yaml
-resource_type: s3
-display_name: "S3 Bucket"
-file_name_field: bucket_name
-pre_validations: []          # glue_db has: [data_owner_approval]
+Key rule: after YAML review passes and a resource becomes `DONE`, the assistant should stop and tell the user they can request PR creation. It must not call `create_pr` in the same turn as YAML generation/review.
 
-collect_fields:
-  - name: plat_env
-    label: "Environment"
-    options: [{value: dev, label: Dev}, {value: prd, label: Prod}]
-    normalize: {development: dev, production: prd, prod: prd}
-    session_reuse: true
-    required: true
-  - name: intake_id
-    validation: "^[MI]\\d+$"
-    session_reuse: true
-  - name: usage_type
-    options: [Source, DataProduct, Scripts, EngAssets]
-    normalize: {source: Source, dataproduct: DataProduct, ...}
-  - name: enterprise_or_func_name
-    options: [AGTR, AH, CBS, ...]
-  - name: enterprise_or_func_subgrp_name
-    depends_on: enterprise_or_func_name    # dependent field
-    ...
+---
 
-derive_fields:
-  - name: bucket_name
-    template: "cargill-{plat_env}-usea1-{enterprise_lower}-{subgrp_lower}-{usage_lower}"
-  - name: account_id
-    lookup: accounts.yaml
-  ...
+## 4. Major Changes Implemented in the Recent Chat
+
+### 4.1 PR intake gate and auto-fill
+
+Implemented in `backend_v3/tools/pr_tools.py`.
+
+New/important session field keys:
+
+- `__pr_intake_answers`
+- `__pr_label_answers`
+- `__pr_target_branch`
+
+New/important functions:
+
+- `prepare_pr_intake()`
+  - Loads `backend_v3/config/pr_template.yaml`.
+  - Finds completed `DONE` resources.
+  - Auto-fills safe PR answers from resource/session state.
+  - Returns missing intake questions, missing labels, target branch status, label preview, and `ready` boolean.
+
+- `set_pr_intake_answers()`
+  - Stores user-provided PR answers.
+  - Validates option fields such as PII, Wave, and Team.
+  - Persists reusable label answers in session fields.
+  - Returns field-level errors if invalid.
+
+- `_build_pr_intake_status()`
+  - Core readiness builder used by both prepare and create paths.
+
+- `create_pr()`
+  - Now checks PR-intake readiness before any GitHub PR creation.
+  - Refuses with a clear error if intake is incomplete.
+  - Uses stored intake and label answers to build PR body and labels.
+
+### 4.2 PR template configuration
+
+Configured in `backend_v3/config/pr_template.yaml`.
+
+Current required PR intake questions:
+
+- `objective` — auto-filled from completed resources.
+- `intake_approval` — auto-filled from intake ID/session state.
+- `data_flow` — currently drafted/derived where possible but user can override.
+- `consumers` — must ask user.
+- `pii` — must ask user; valid values are `Yes`, `No`, `Unknown — pending classification`.
+- `compliance` — optional/defaults to `None`.
+
+Current labels:
+
+- Derived labels: `ENV`, `Enterprise`, optional `Subgroup`.
+- Asked labels: `Wave` with values `W1`, `W2`, `W3`, `W4`; `Team` with values `DataEng`, `Analytics`, `Platform`, `Governance`.
+- Static label: `CREATED_BY:MiNi`.
+
+### 4.3 Tool registry updates
+
+Implemented in `backend_v3/tools/registry.py`.
+
+New/important registered tools include:
+
+- `prepare_pr_intake`
+- `set_pr_intake_answers`
+- `create_pr`
+- `create_update_pr`
+- `check_resource_exists`
+- `check_update_capability`
+- `fetch_existing_resource_file`
+- `stage_append_only_update`
+- `stage_full_updated_yaml`
+- `validate_append_only_change`
+- `preview_update_diff`
+
+The OpenAI-style function schemas were updated so the LLM can call these tools.
+
+### 4.4 Route lock and create/update separation
+
+Implemented in `backend_v3/agent/guardrails.py` and `backend_v3/agent/loop.py`.
+
+Important session field key:
+
+- `__active_route`
+
+Behavior:
+
+- Create intent examples: `create`, `provision`, `make`, `want`, `need`, or a bare supported resource mention like `s3`.
+- Update intent examples: `update`, `modify`, `edit`, `append`, `patch`, or explicit existing resource/file language.
+- Bare supported resource requests default to create route.
+- Once a session is locked, cross-route user requests are blocked with a message telling the user to start a new request or cancel/reset.
+- Tool usage is also route-enforced. Create-route tools cannot be called in update mode and update-route tools cannot be called in create mode.
+
+The specific user bug fixed here was: **typing `want s3` caused the assistant to ask update fields (`branch`, `file_path`, `resource_name`) during create collection.** The fix was to default bare resource mentions to create route and to filter update prompt guidance out of the system prompt when active route is create.
+
+### 4.5 Route-aware prompt filtering
+
+Implemented in `backend_v3/agent/context_builder.py`.
+
+Key changes:
+
+- `build_system_prompt(session, user_profile, active_route=None)` accepts the active route.
+- `_build_route_skills_section(active_route)` includes only create skill or update skill when route is known.
+- `_build_update_capabilities_section(active_route)` hides update capabilities unless active route is `update`.
+- `_filter_system_prompt_for_route(system_md, active_route)` removes the opposite route section from `system.md`.
+- `backend_v3/agent/loop.py` loads `__active_route` from session fields and passes it into `build_system_prompt()`.
+
+Expected result: in create route, the system prompt should not contain update guidance or update required inputs.
+
+### 4.6 Repo existence and update tooling
+
+Implemented in `backend_v3/tools/repo_tools.py` and integrated with PR/generate tools.
+
+Important session field keys:
+
+- `__resource_exists:<resource_id>`
+- `__resource_existence_detail:<resource_id>`
+- `__pending_update`
+
+Key capabilities:
+
+- Resolve generated resource YAML path via `backend_v3/config/repo_directory_map.yaml`.
+- Check whether a generated create resource already exists in the configured repo path.
+- Prevent create PR flow when a create resource already exists or existence is unknown.
+- Support update-route staging:
+  - `check_update_capability`
+  - `fetch_existing_resource_file`
+  - `stage_append_only_update`
+  - `stage_full_updated_yaml`
+  - `validate_append_only_change`
+  - `preview_update_diff`
+  - `create_update_pr`
+
+Current update config in `backend_v3/config/update_capabilities.yaml`:
+
+- S3 update is enabled.
+- S3 update is append-only.
+- Update route requires `branch` and either `resource_name` or `file_path`.
+- Glue DB update is disabled.
+- IAM update is disabled.
+
+### 4.7 Approval and collection flow fixes
+
+The chat also included fixes/requirements around data-owner approval and collection order:
+
+- Collect normal required fields before requesting data-owner approval.
+- If a resource needs approval, keep using the existing `resource_id`; do not call `create_resources` again and create duplicates.
+- Approval upload should pass exact `resource_ids` to the approval validator.
+- For create field collection, never ask update-only inputs (`branch`, `file_path`, `resource_name`).
+
+These behaviors are now strongly documented in `backend_v3/context/system.md` and supported by backend logic.
+
+---
+
+## 5. Current Create Flow Contract
+
+Use this as the mental model when continuing work:
+
+1. User asks for a resource, e.g. `want s3`.
+2. Guardrail infers create route and stores `__active_route=create`.
+3. System prompt is rebuilt without update route guidance.
+4. LLM resolves resource type and calls `create_resources`.
+5. Assistant collects `intake_id` first, then remaining required create fields from resource config.
+6. `set_fields` validates and stores fields.
+7. Once required fields are complete, guardrail auto-runs derivation.
+8. If needed, approval gate runs after required field collection, not before.
+9. Repo existence check verifies generated YAML path does not already exist.
+10. User confirms field/YAML values.
+11. `generate_yaml` runs; reviewer runs automatically.
+12. Resource becomes `DONE`.
+13. Assistant tells user they can say `create PR` when ready.
+14. On a separate explicit PR request, LLM calls `prepare_pr_intake` first.
+15. Assistant asks only missing PR intake/label/target branch fields.
+16. LLM calls `set_pr_intake_answers` with user answers.
+17. When `ready=true`, LLM may call `create_pr`.
+
+Important: `create_pr` itself still enforces the readiness gate, so even if the LLM tries to skip steps, the backend blocks it.
+
+---
+
+## 6. Current Update Flow Contract
+
+Use update route only when user explicitly asks to update/modify/edit/append an existing file or resource.
+
+Expected flow:
+
+1. Guardrail infers update route and stores `__active_route=update`.
+2. Prompt includes update guidance and update capabilities.
+3. LLM calls `check_update_capability(resource_type)`.
+4. If enabled, assistant asks for target `branch` and either `resource_name` or `file_path`.
+5. LLM calls `fetch_existing_resource_file`.
+6. User provides append-only update content or a full updated YAML.
+7. LLM calls `stage_append_only_update` or `stage_full_updated_yaml`.
+8. Backend validates append-only behavior with `validate_append_only_change`.
+9. Assistant shows `preview_update_diff` and asks user to confirm.
+10. After confirmation, LLM calls `create_update_pr`.
+
+Important: update flow is not fully end-to-end tested yet in realistic GitHub conditions.
+
+---
+
+## 7. Important File Map
+
+### Agent and prompt routing
+
+- `backend_v3/agent/loop.py`
+  - Main ReAct/tool loop.
+  - Calls route guardrail before building prompt.
+  - Passes `active_route` to prompt builder.
+  - Enforces tool route guardrail before tool execution.
+
+- `backend_v3/agent/guardrails.py`
+  - Route inference and route lock.
+  - Tool allow/deny lists for create/update/neutral tools.
+  - Auto-inject state, auto-derive, auto-review, PR blocking, session field persistence, intake check.
+
+- `backend_v3/agent/context_builder.py`
+  - Dynamic system prompt builder.
+  - Adds supported resources, pre-validation requirements, route skills, update capabilities.
+  - Filters unrelated route sections.
+
+- `backend_v3/context/system.md`
+  - Main system instructions.
+  - Includes create route, update route, pre-validation gates, field collection, lifecycle, PR creation rules.
+
+- `backend_v3/context/skills/create_resource.md`
+  - Create-route behavioral skill.
+
+- `backend_v3/context/skills/update_resource.md`
+  - Update-route behavioral skill.
+
+### Tools
+
+- `backend_v3/tools/pr_tools.py`
+  - PR intake, PR body/title/labels, create PR, create update PR.
+
+- `backend_v3/tools/repo_tools.py`
+  - Repo path resolution, existence checks, update fetch/stage/diff helpers.
+
+- `backend_v3/tools/registry.py`
+  - Central tool map and function schemas.
+
+- `backend_v3/tools/session_tools.py`
+  - Resource creation/drop/clone/session state.
+
+- `backend_v3/tools/field_tools.py`
+  - Field collection, validation, resource info, common field analysis.
+
+- `backend_v3/tools/derive_tools.py`
+  - Derived fields.
+
+- `backend_v3/tools/generate_tools.py`
+  - YAML generation.
+
+- `backend_v3/tools/reviewer_tools.py`
+  - YAML review, currently mock-ish/limited.
+
+- `backend_v3/tools/intake_tools.py`
+  - Intake ID and approval document validation hooks.
+
+### Config
+
+- `backend_v3/config/settings.yaml`
+  - Supported resources and aliases.
+
+- `backend_v3/config/resources/s3.yaml`
+  - S3 collect/derive rules.
+
+- `backend_v3/config/resources/glue_db.yaml`
+  - Glue DB collect/derive rules.
+
+- `backend_v3/config/pr_template.yaml`
+  - PR intake questions, labels, PR body template, title template.
+
+- `backend_v3/config/update_capabilities.yaml`
+  - Update route enablement and required inputs.
+
+- `backend_v3/config/repo_directory_map.yaml`
+  - MIW repo path mapping and existence-check settings.
+
+- `backend_v3/config/pre_validations.yaml`
+  - Central approval/pre-validation behavior.
+
+---
+
+## 8. Validation Performed in the Chat
+
+### 8.1 Compile checks
+
+Python compile checks were run against modified modules and completed without syntax errors.
+
+### 8.2 PR-intake smoke test results
+
+A custom smoke script exercised PR intake preparation, validation, and create gate behavior. Key output:
+
+```text
+ready_initial = False
+auto_keys = ['compliance', 'data_flow', 'intake_approval', 'objective']
+missing_intake = ['consumers', 'pii']
+missing_labels = ['Wave', 'Team']
+target_branch_missing = True
+create_blocked_error = "PR intake is incomplete. Cannot create PR yet."
+invalid_valid = False
+field_errors = {
+  'pii': "Must be one of: ['Yes', 'No', 'Unknown — pending classification']",
+  'Wave': "Must be one of: ['W1', 'W2', 'W3', 'W4']"
+}
+ready_final = True
+labels_preview = ['ENV:dev', 'Enterprise:AGTR', 'Subgroup:APAC', 'Wave:W2', 'Team:DataEng', 'CREATED_BY:MiNi']
+post_gate_error = "GitHub token not found. Please re-authenticate via GitHub OAuth."
 ```
 
+Interpretation:
+
+- PR intake gate works.
+- Auto-fill works for safe fields.
+- Invalid PII/Wave values are rejected.
+- Once intake is ready, the flow proceeds to GitHub token check, which is expected to fail without OAuth credentials.
+
+### 8.3 Route leakage smoke test results
+
+After route-aware prompt filtering, a smoke test for `want s3` showed:
+
+```text
+route_block = None
+active_route = create
+has_update_skill = False
+has_update_flow = False
+has_update_cap_required_inputs = False
+has_create_skill = True
+```
+
+Interpretation:
+
+- Bare S3 request now locks to create route.
+- Update guidance and update required inputs are hidden from prompt.
+- Create skill remains present.
+
+### 8.4 Backend server restart issue
+
+Attempted to start backend with uvicorn on port 8000, but it failed:
+
+```text
+ERROR: [Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000): only one usage of each socket address (protocol/network address/port) is normally permitted
+```
+
+Interpretation:
+
+- Another backend/server process is already using port 8000.
+- The running backend may not include the latest code changes unless it was restarted separately.
+- Stop the existing process or run the backend on a different port before manual testing.
+
 ---
 
-## 7. Frontend
+## 9. Known Current State
 
-- React SPA at `frontend/` (Vite, port 5173)
-- Calls backend `/chat` endpoint
-- Renders structured data sidebar (resource cards, field tables, YAML preview)
-- YAML preview is built from **backend state dictionaries** (`resource.all_fields`), NOT from LLM text output
-- Session management: create, switch, delete, rename sessions
+### Implemented and smoke-tested
 
----
+- PR intake readiness and auto-fill.
+- `create_pr` gate on PR intake readiness.
+- PR intake answer validation and label preview.
+- Route lock session field.
+- Route-specific tool guardrail.
+- Route-aware system prompt filtering.
+- Fix for `want s3` accidentally asking update fields.
 
-## 8. Current State & Known TODOs
+### Implemented but needs deeper testing
 
-### Working:
-- Full flow: S3 and Glue DB creation through chat
-- Pre-store validation (invalid intake_id never stored)
-- Config-driven field collection with normalize maps
-- Auto-derivation, auto-review guardrails
-- Multi-resource common-field-first collection
-- YAML preview waits for all resources to be CONFIRMING
-- Session field reuse across resources
-- Alias resolution for resource types
-- PR creation (GitHub Enterprise)
+- Repo existence checks against configured GitHub/local repo.
+- Update route end-to-end flow.
+- Append-only update validation and diff preview in realistic data.
+- `create_update_pr` against real GitHub credentials.
+- Frontend support for new structured PR intake/update diff/approval states.
 
-### Mock/TODO:
-- `check_intake_id` uses hardcoded list → needs Power BI API integration
-- `validate_approval_image` always passes → needs LLM vision integration
-- `review_yaml` always passes → needs real rule engine (rules exist in `context/review_rules.md`)
-- `guardrail_auto_check_intake_id` is partially redundant (validation moved pre-store) — could simplify
-- No automated test suite yet (only manual validation scripts)
+### Still mock or incomplete
 
-### Recent Bugs Fixed:
-1. "Export" accepted as `usage_type` → added normalization + strict options validation
-2. Invalid intake_id stored before validation → moved validation BEFORE state mutation
-3. YAML preview shown for invalid resources → gated behind all-CONFIRMING check
-4. `generate_yaml` was setting status to DONE directly → now stays CONFIRMING, reviewer moves to DONE
-5. Skill docs listing field values caused LLM to invent options → made skill docs config-referencing only
+- GitHub OAuth/token required for actual PR creation.
+- `review_yaml` behavior is still limited/mock-like.
+- Intake ID validation and data-owner approval validation may still use mock or placeholder logic depending on current tool implementation.
+- Full frontend UX polish is pending.
 
 ---
 
-## 9. How to Run
+## 10. How to Run Locally
+
+Backend:
 
 ```bash
-# Backend
 cd backend_v3
 pip install -r requirements.txt
-python -m uvicorn api:app --host 0.0.0.0 --port 8000
+python -m uvicorn api:app --host 127.0.0.1 --port 8000
+```
 
-# Frontend
+Frontend:
+
+```bash
 cd frontend
 npm install
 npx vite --port 5173
 ```
 
-Database: SQLite file `mini.db` (auto-created on first run via `db/schema.sql`)
+If port 8000 is in use, stop the old process or use another backend port and adjust frontend API configuration if needed.
 
 ---
 
-## 10. Design Principles
+## 11. Recommended Next Steps for the Next Copilot Session
 
-1. **Config is truth** — field options, normalize maps, derivation rules live in YAML config, not prompts
-2. **Code enforces, prompts guide** — guardrails handle correctness; prompts handle UX/tone
-3. **Validate before store** — external validation happens BEFORE state mutation
-4. **LLM sees structured data** — tools return JSON; system prompt tells LLM how to interpret it
-5. **Minimal LLM surface** — keep system prompt short (~100 lines), skill files minimal, let tools carry context
-6. **Multi-resource aware** — common fields collected once, applied to all resources in session
+1. **Restart backend cleanly**
+   - Ensure the running backend process includes the latest code.
+   - Resolve port 8000 conflict if necessary.
+
+2. **Manually retest create flow**
+   - Use a prompt such as `want s3`.
+   - Confirm the assistant asks create fields only.
+   - Confirm it does not ask `branch`, `file_path`, or `resource_name`.
+
+3. **Retest PR intake from UI/API**
+   - Complete a resource to `DONE`.
+   - Say `create PR` in a separate message.
+   - Confirm `prepare_pr_intake` runs first.
+   - Confirm missing PR metadata is asked.
+   - Confirm `create_pr` blocks until `ready=true`.
+
+4. **End-to-end update flow testing**
+   - Start with explicit update request, e.g. `update existing s3`.
+   - Provide branch and resource name or file path.
+   - Verify fetch, append-only staging, diff preview, and `create_update_pr` behavior.
+
+5. **Frontend integration**
+   - Add/verify UI surfaces for:
+     - PR intake questions and missing values.
+     - Approval upload with target resource IDs.
+     - Update diff preview/confirmation.
+
+6. **Add automated tests**
+   - Unit tests for `prepare_pr_intake` / `set_pr_intake_answers`.
+   - Guardrail tests for route inference and tool blocking.
+   - Prompt composition tests verifying update sections are absent in create route.
+   - Update flow tests with local mock repo files.
+
+---
+
+## 12. Expected User-Facing Behavior Examples
+
+### Example A — create request
+
+User:
+
+```text
+want s3
+```
+
+Expected assistant behavior:
+
+- Lock route to create.
+- Create an S3 resource or ask for initial create fields.
+- Ask for create fields such as intake ID/environment/enterprise/usage type based on config.
+- Do **not** ask for `branch`, `file_path`, or `resource_name`.
+
+### Example B — PR request after resource is DONE
+
+User:
+
+```text
+create PR
+```
+
+Expected assistant behavior:
+
+- Call `prepare_pr_intake` first.
+- Ask only missing PR metadata, for example:
+  - downstream consumers
+  - PII/sensitive classification
+  - Wave
+  - Team
+  - target branch
+- Do not call `create_pr` until `ready=true`.
+
+### Example C — update request
+
+User:
+
+```text
+update existing s3 bucket
+```
+
+Expected assistant behavior:
+
+- Lock route to update.
+- Call `check_update_capability`.
+- Ask for target branch and either existing resource name or repo-relative file path.
+- Fetch existing YAML and proceed with append-only update/diff preview.
+
+---
+
+## 13. Critical Rules to Preserve
+
+- Config is truth; do not hardcode resource fields/options in prompts.
+- Code guardrails enforce correctness; prompts only guide tone and flow.
+- Validate before storing values.
+- Do not mix create and update tools in the same active route.
+- Bare supported resource requests default to create route.
+- In create flow, never ask update-only inputs.
+- Do not call `create_pr` in the same turn as `generate_yaml`.
+- Always call `prepare_pr_intake` before `create_pr`.
+- `create_pr` must remain gated by PR intake readiness.
+- If repo existence check says a create resource already exists, do not silently switch to update route.
+
+---
+
+## 14. Quick Continuation Checklist
+
+Before making new changes, inspect these files:
+
+- `backend_v3/context/system.md`
+- `backend_v3/agent/guardrails.py`
+- `backend_v3/agent/context_builder.py`
+- `backend_v3/agent/loop.py`
+- `backend_v3/tools/pr_tools.py`
+- `backend_v3/tools/repo_tools.py`
+- `backend_v3/tools/registry.py`
+- `backend_v3/config/pr_template.yaml`
+- `backend_v3/config/update_capabilities.yaml`
+- `backend_v3/config/repo_directory_map.yaml`
+
+Then run/verify:
+
+```bash
+cd backend_v3
+python -m py_compile agent/context_builder.py agent/guardrails.py agent/loop.py tools/pr_tools.py tools/repo_tools.py tools/registry.py
+```
+
+If backend is already running on port 8000, stop it or run on another port before testing changes.
