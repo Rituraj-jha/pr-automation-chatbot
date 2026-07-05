@@ -1,0 +1,31 @@
+rulepack:
+  id: global_ascii_check
+  version: "1.0.0"
+  name: global_ascii_rules
+  description: "Global ASCII-only validation across files"
+  rulepack_enabled: true
+  resource_type: global
+  account_type: all
+  python_file_reference: global/parser_validator.py
+
+rules:
+  GLB_ASC_001:
+    name: ascii_only_complete_file
+    description: "Ensures the entire file is ASCII-only."
+    enabled: true
+    severity: ERROR
+    type: ascii_only
+    execution_scope: file
+    target_field: .
+    params:
+      allowed_extensions:
+        - ".yml"
+        - ".yaml"
+        - ".json"
+      yaml_mode: raw
+      json_mode: semantic
+      max_examples: 10
+      include_line_snippet: true
+      snippet_radius: 30
+    message: "Non-ASCII characters found in file."
+    recommendation: "Replace or remove non-ASCII characters."

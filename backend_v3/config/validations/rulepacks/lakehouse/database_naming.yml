@@ -1,0 +1,70 @@
+rulepack:
+  id: lakehouse_database_naming
+  version: "1.0.0"
+  name: lakehouse_database_naming_rules
+  description: "Validation rules for Lakehouse Glue database naming conventions"
+  rulepack_enabled: true
+  resource_type: glue_db
+  account_type: lakehouse
+  python_file_reference: database_naming.py
+
+rules:
+  LH_DB_001:
+    name: allowed_database_layers_in_name
+    description: "Only raw, raw_serving, internal, and cdp are allowed in Lakehouse database names"
+    enabled: true
+    severity: ERROR
+    type: allowed_values_in_name
+    target_field: database_name
+    params:
+      allowed_values:
+        - raw_serving
+        - raw
+        - cdp
+        - internal
+      disallowed_values:
+        - curated
+        - serving
+    message: "The database name contains a disallowed layer: {disallowed_values_found}"
+    recommendation: "The database name should contain only one of: raw, raw_serving, internal, cdp"
+
+  LH_DB_002:
+    name: s3_bucket_naming_convention
+    description: "Validate S3 bucket name against Lakehouse naming convention"
+    enabled: true
+    severity: ERROR
+    type: regex_match
+    execution_scope: file
+    target_field: database_s3_location
+    params:
+      pattern: "^s3://${env}-lh1-(agtr|food|spec|corp(?:-[a-z0-9]+)?)-[a-z0-9-]+(?:/[a-z0-9/_-]+)*/?$"
+    message: "The S3 bucket in database_s3_location does not follow the Lakehouse naming convention"
+    recommendation: "Use format: s3://<env>-lh1-<enterprise>-<suffix>/<path>"
+
+  LH_DB_004:
+    name: database_name_pattern_check
+    description: "Lakehouse database name must follow the naming convention"
+    enabled: true
+    severity: ERROR
+    type: regex_match
+    execution_scope: file
+    target_field: database_name
+    params:
+      pattern: "^lh_[a-z0-9]+(?:_[a-z0-9]+)*_(raw|raw_serving|cdp|internal)_${env}$"
+    message: "The database name does not follow the required Lakehouse naming convention"
+    recommendation: "Use format: lh_<source>_(raw|raw_serving|internal|cdp)_<env>"
+
+  LH_DB_006:
+    name: database_name_source_name_check
+    description: "Lakehouse raw database name and S3 location should contain source_name"
+    enabled: true
+    severity: ERROR
+    type: equality_check
+    execution_scope: file
+    target_field: data_layer
+    params:
+      python_expression:
+        - f"data_layer.lower()=='raw' and ('_' + lower({source_name}) + '_').lower() in {database_name}.lower()"
+        - f"data_layer.lower()=='raw' and ('/' + lower({source_name}) + '/').lower() in {database_s3_location}.lower()"
+    message: "The database name and S3 location should contain ${source_name} for raw layer databases."
+    recommendation: "Ensure database_name and database_s3_location include the source_name."

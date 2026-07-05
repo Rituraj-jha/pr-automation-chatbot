@@ -37,6 +37,7 @@ async def load_session(session_id: str) -> Session | None:
         "SELECT * FROM resources WHERE session_id = ? ORDER BY id", (session_id,)
     )
     for r in resource_rows:
+        vr_raw = r["validation_result"] if "validation_result" in r.keys() else None
         session.resources.append(Resource(
             resource_id=r["resource_id"],
             resource_type=r["resource_type"],
@@ -45,6 +46,7 @@ async def load_session(session_id: str) -> Session | None:
             derived_fields=json.loads(r["derived_fields"]),
             user_overrides=json.loads(r["user_overrides"]) if r["user_overrides"] else {},
             yaml_output=r["yaml_output"],
+            validation_result=json.loads(vr_raw) if vr_raw else None,
         ))
 
     # Load messages
@@ -127,8 +129,8 @@ async def save_resource(session_id: str, resource: Resource):
     db = await get_db()
     await db.execute(
         """INSERT OR REPLACE INTO resources
-           (session_id, resource_id, resource_type, status, collected_fields, derived_fields, user_overrides, yaml_output)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+           (session_id, resource_id, resource_type, status, collected_fields, derived_fields, user_overrides, yaml_output, validation_result)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             session_id,
             resource.resource_id,
@@ -138,6 +140,7 @@ async def save_resource(session_id: str, resource: Resource):
             json.dumps(resource.derived_fields),
             json.dumps(resource.user_overrides),
             resource.yaml_output,
+            json.dumps(resource.validation_result) if resource.validation_result is not None else None,
         ),
     )
     await db.commit()

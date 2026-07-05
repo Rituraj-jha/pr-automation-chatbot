@@ -1,0 +1,152 @@
+rulepack:
+  id: global_allowed_values
+  version: "1.0.0"
+  name: global_allowed_values_rules
+  description: "Validation rules for global allowed values across different resources"
+  rulepack_enabled: true
+  resource_type: global
+  account_type: all
+  python_file_reference: global_allowed_values.py
+
+rules:
+  GLBL_002:
+    name: allowed_enterprise_names
+    description: "Validate enterprise_or_func_name against allowed values"
+    enabled: true
+    severity: ERROR
+    type: allowed_values_in_name
+    target_field: enterprise_or_func_name
+    params:
+      allowed_values:
+        - AGTR
+        - FOOD
+        - SPEC
+        - CORP
+    message: "The enterprise_or_func_name contains a disallowed value. Allowed values are: ${allowed_values}"
+    recommendation: "The enterprise_or_func_name should be one of: ${allowed_values}"
+
+  GLBL_003:
+    name: allowed_data_construct
+    description: "Validate data_construct against allowed values"
+    enabled: true
+    severity: ERROR
+    type: allowed_values_in_name
+    target_field: data_construct
+    params:
+      glue_db:
+        allowed_values:
+          - Source
+          - DataProduct
+    message: "The data_construct contains a disallowed value. Allowed values are: ${allowed_values}"
+    recommendation: "The data_construct should be one of: ${allowed_values}"
+
+  GLBL_004:
+    name: allowed_data_layer
+    description: "Validate data_layer against allowed values"
+    enabled: true
+    severity: ERROR
+    type: allowed_values_in_name
+    target_field: data_layer
+    params:
+      glue_db:
+        allowed_values:
+          - raw
+          - cur
+          - srv
+          - int
+    message: "The data_layer contains a disallowed value. Allowed values are: ${allowed_values}"
+    recommendation: "The data_layer should be one of: ${allowed_values}"
+
+  GLBL_005:
+    name: allowed_data_privacy_level
+    description: "Validate data_privacy against allowed values"
+    enabled: true
+    severity: ERROR
+    type: allowed_values_in_name
+    target_field: data_privacy
+    params:
+      glue_db:
+        allowed_values:
+          - PI
+          - PCI
+          - PHI
+          - BCI
+          - NONE
+    message: "The data_privacy contains a disallowed value. Allowed values are: ${allowed_values}"
+    recommendation: "The data_privacy should be one of: ${allowed_values}"
+
+  GLBL_007_2:
+    name: data_owner_email
+    description: "Validate data_owner_email against allowed values"
+    enabled: true
+    severity: WARNING
+    type: allowed_values_in_name
+    target_field: data_owner_email
+    resources:
+      - glue_db
+    params:
+      regex: '^[A-Za-z_]+@cargill\.com$'
+    message: "The data_owner_email contains a disallowed value."
+    recommendation: "The data_owner_email should be a valid @cargill.com address."
+
+  GLBL_008_1:
+    name: allowed_region_glue
+    description: "Validate region against allowed values"
+    enabled: true
+    severity: ERROR
+    type: allowed_values_in_name
+    target_field: region
+    resources:
+      - glue_db
+    params:
+      allowed_values:
+        - us-east-1
+    message: "The region contains a disallowed value. Allowed values are: ${allowed_values}"
+    recommendation: "The region should be one of: ${allowed_values}"
+
+  GLBL_008_2:
+    name: allowed_region_s3
+    description: "Validate aws_region against allowed values"
+    enabled: true
+    severity: ERROR
+    type: allowed_values_in_name
+    target_field: aws_region
+    resources:
+      - s3
+    params:
+      allowed_values:
+        - us-east-1
+    message: "The aws_region contains a disallowed value. Allowed values are: ${allowed_values}"
+    recommendation: "The aws_region should be one of: ${allowed_values}"
+
+  GLBL_009:
+    name: allowed_data_classification
+    description: "Validate data_classification against allowed values"
+    enabled: true
+    severity: ERROR
+    type: allowed_values_in_name
+    target_field: data_classification
+    params:
+      glue_db:
+        allowed_values:
+          - "Public"
+          - "Confidential - General Use"
+          - "Confidential - Limited"
+          - "Confidential - Restricted"
+          - "Confidential - Highly Restricted"
+    message: "The data_classification contains a disallowed value. Allowed values are: ${allowed_values}"
+    recommendation: "The data_classification should be one of: ${allowed_values}"
+
+  GLBL_011:
+    name: data_leader
+    description: "Validate data_leader against allowed values"
+    enabled: true
+    severity: ERROR
+    type: allowed_values_in_name
+    target_field: data_leader
+    resources:
+      - glue_db
+    params:
+      regex: '^[A-Za-z][A-Za-z0-9]{3,7}$'
+    message: "The data_leader field should be a valid DS ID (4-8 alphanumeric chars starting with a letter)."
+    recommendation: "Provide a valid DS ID for data_leader."

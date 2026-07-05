@@ -1,0 +1,117 @@
+rulepack:
+  id: global_parser_check
+  version: "1.0.0"
+  name: global_parser_rules
+  description: "Global parsing and field-level validation rules for YAML files"
+  rulepack_enabled: true
+  resource_type: global
+  account_type: all
+  python_file_reference: global/parser_validator.py
+
+rules:
+  GLB_PRS_001:
+    name: file_is_parseable
+    description: "Validates that the file can be parsed as YAML based on extension."
+    enabled: true
+    severity: ERROR
+    type: parseable_file
+    execution_scope: file
+    target_field: NONE
+    params:
+      allowed_extensions:
+        - ".yml"
+        - ".yaml"
+        - ".json"
+      fail_on_unknown_extension: true
+    message: "File could not be parsed as YAML/JSON: {error_message}"
+    recommendation: "Fix YAML/JSON syntax errors and ensure file content matches extension."
+
+  GLB_ACC_001:
+    name: aws_account_id_must_be_12_digits
+    description: "Validates that aws_account_id exists and is exactly 12 digits."
+    enabled: true
+    severity: ERROR
+    type: regex_match
+    execution_scope: field
+    target_field: aws_account_id
+    params:
+      pattern: "^[0-9]{12}$"
+      cast_to_string: true
+      allow_int: true
+      allow_float: false
+    message: "aws_account_id must be exactly 12 digits. Found: {actual_value}"
+    recommendation: "Provide a valid 12-digit AWS account ID (e.g., 123456789012)."
+
+  GLB_ACC_002:
+    name: aws_account_id_allowlist_by_repo_folder
+    description: "Validates aws_account_id is in the approved allow-list based on account folder."
+    enabled: true
+    severity: ERROR
+    type: regex_match
+    execution_scope: field
+    target_field: aws_account_id
+    params:
+      cast_to_string: true
+      allow_int: true
+      allow_float: false
+      pattern_by_path:
+        - path_contains: "/lakehouse-001/"
+          pattern: "^(438465132548|578647603827)$"
+        - path_contains: "/compute-001/"
+          pattern: "^(068887784423|367241115350)$"
+        - path_contains: "/compute-002/"
+          pattern: "^(933999308564|884308299029)$"
+        - path_contains: "/compute-003/"
+          pattern: "^(836901248866|011379513867)$"
+        - path_contains: "/compute-004/"
+          pattern: "^(324612370323|632247962242)$"
+      pattern: "^[0-9]{12}$"
+    message: "aws_account_id is not valid for this repo folder. Found: {actual_value}"
+    recommendation: "Use the approved AWS account ID that matches the account type."
+
+  GLB_DESC_001:
+    name: any_description_field_required_not_placeholder
+    description: "Ensures all *_description fields are present, non-empty, and not placeholders."
+    enabled: true
+    severity: ERROR
+    type: string_not_empty_and_not_in_key_regex
+    execution_scope: field
+    target_field: .
+    params:
+      key_regex: "(?i)_description$"
+      disallowed_values:
+        - "tbd"
+        - "to be decided"
+        - "to be determined"
+        - "na"
+        - "n/a"
+        - "null"
+      require_at_least_one: false
+    message: "Description field {field_path} is missing/empty or contains a placeholder: {actual_value}"
+    recommendation: "Provide a meaningful, non-placeholder description in {field_path}."
+
+  GLB_INTAKE_001:
+    name: intake_id_presence_check
+    description: "Ensures intake_id is present and non-empty."
+    enabled: true
+    severity: ERROR
+    type: required_field
+    execution_scope: field
+    target_field: intake_id
+    params:
+      require_non_empty_string: true
+    message: "intake_id is missing or empty."
+    recommendation: "Provide a valid intake_id (must not be empty)."
+
+  GLB_INTAKE_002:
+    name: intake_id_format_check
+    description: "Ensures intake_id starts with 'M' followed by exactly 7 digits."
+    enabled: true
+    severity: ERROR
+    type: regex_match
+    execution_scope: field
+    target_field: intake_id
+    params:
+      pattern: "^M[0-9]{7}$"
+    message: "intake_id must start with 'M' followed by exactly 7 digits. Found: {actual_value}"
+    recommendation: "Provide intake_id in the format MXXXXXXX."

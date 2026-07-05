@@ -1,0 +1,72 @@
+rulepack:
+  id: compute_database_naming
+  version: "1.0.0"
+  name: compute_database_naming_rules
+  description: "Validation rules for Compute Glue database naming conventions"
+  rulepack_enabled: true
+  resource_type: glue_db
+  account_type: compute
+  python_file_reference: database_naming.py
+
+rules:
+  CMP_DB_001:
+    name: allowed_database_layers_in_name
+    description: "Only curated, serving, and internal are allowed in Compute database names"
+    enabled: true
+    severity: ERROR
+    type: allowed_values_in_name
+    target_field: database_name
+    params:
+      allowed_values:
+        - curated
+        - serving
+        - internal
+      disallowed_values:
+        - raw
+        - raw_serving
+        - cdp
+    message: "The database name contains a disallowed layer: {disallowed_values_found}"
+    recommendation: "The database name should contain only one of: serving, curated, internal"
+
+  CMP_DB_003:
+    name: database_layer_in_s3_location
+    description: "Validate layer name appears in S3 location"
+    enabled: true
+    severity: ERROR
+    type: equality_check
+    execution_scope: file
+    target_field:
+      - database_s3_location
+      - database_name
+    params:
+      python_expression:
+        - f"('curated' if lower(data_layer) == 'cur' else 'serving' if lower(data_layer) == 'srv' else 'internal' if lower(data_layer) == 'int' else lower(data_layer)) in lower({database_s3_location})"
+        - f"('curated' if lower(data_layer) == 'cur' else 'serving' if lower(data_layer) == 'srv' else 'internal' if lower(data_layer) == 'int' else lower(data_layer)) in lower({database_name})"
+    message: "The database S3 location and name should contain the data layer (curated, serving, or internal)"
+    recommendation: "Ensure database_name and database_s3_location include the layer name."
+
+  CMP_DB_004:
+    name: database_name_pattern_check
+    description: "Compute database name must follow naming convention"
+    enabled: true
+    severity: ERROR
+    type: regex_match
+    execution_scope: file
+    target_field: database_name
+    params:
+      pattern: "^[a-z0-9]+(?:_[a-z0-9]+)*_(serving|curated|internal)_${env}$"
+    message: "The database name does not follow the required naming convention"
+    recommendation: "Use format: <entity>_<product>_(curated|serving|internal)_<env>"
+
+  CMP_DB_005:
+    name: database_s3_location_pattern_check
+    description: "Compute database S3 location must follow naming convention"
+    enabled: true
+    severity: ERROR
+    type: regex_match
+    execution_scope: file
+    target_field: database_s3_location
+    params:
+      pattern: "^s3://${env}-cmp[1-4]-[a-z0-9]+(?:-[a-z0-9]+)*-dp(/.*)?$"
+    message: "The database S3 location does not follow the required naming convention"
+    recommendation: "Use format: s3://<env>-cmp<N>-<entity>-dp/<layer>/<env>/..."

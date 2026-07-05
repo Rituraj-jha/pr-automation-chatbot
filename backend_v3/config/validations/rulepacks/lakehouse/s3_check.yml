@@ -1,0 +1,34 @@
+rulepack:
+  id: lakehouse_s3_check
+  version: "1.0.0"
+  name: lakehouse_s3_check_rules
+  description: "Validation rules for Lakehouse S3 bucket naming"
+  rulepack_enabled: true
+  resource_type: s3
+  account_type: lakehouse
+  python_file_reference: s3_check.py
+
+rules:
+  LH_S3_001:
+    name: s3_bucket_naming_and_enterprise_subgroup_check
+    description: "Validate S3 bucket naming convention and enterprise/subgroup rules for Lakehouse"
+    enabled: true
+    severity: ERROR
+    type: bucket_naming_convention_check
+    target_field: None
+    params:
+      bucket_field: bucket_name
+      enterprise_field: enterprise_or_func_name
+      subgroup_field: enterprise_or_func_subgrp_name
+      no_subgroup_enterprises:
+        - AGTR
+        - FOOD
+        - SPEC
+      subgroup_mandatory_enterprises:
+        - CORP
+      min_length: 10
+      max_length: 63
+      allowed_pattern: "^${env}-lh1-[a-z][a-z0-9.-]*-(src|scripts|eng-assets)$"
+      disallow_consecutive_dots: true
+    message: "The S3 bucket name does not follow the required Lakehouse naming convention"
+    recommendation: "Bucket name must follow: <env>-lh1-<description>-(src|scripts|eng-assets)"

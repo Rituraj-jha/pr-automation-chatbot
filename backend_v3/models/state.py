@@ -26,6 +26,7 @@ class Resource:
     derived_fields: dict[str, Any] = field(default_factory=dict)
     user_overrides: dict[str, Any] = field(default_factory=dict)
     yaml_output: str | None = None
+    validation_result: dict | None = None
 
     @property
     def all_fields(self) -> dict[str, Any]:
@@ -41,6 +42,7 @@ class Resource:
             "derived_fields": self.derived_fields,
             "user_overrides": self.user_overrides,
             "yaml_output": self.yaml_output,
+            "validation_result": self.validation_result,
         }
 
 

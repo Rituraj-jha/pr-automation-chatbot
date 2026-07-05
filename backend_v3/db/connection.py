@@ -33,6 +33,12 @@ async def init_db():
     schema = schema_path.read_text(encoding="utf-8")
     await db.executescript(schema)
     await db.commit()
+    # Migration: add validation_result column if it doesn't exist (for existing DBs)
+    try:
+        await db.execute("ALTER TABLE resources ADD COLUMN validation_result TEXT")
+        await db.commit()
+    except Exception:
+        pass  # Column already exists — ignore
 
 
 async def close_db():

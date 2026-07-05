@@ -1,0 +1,26 @@
+rulepack:
+  id: compute_s3_check
+  version: "1.0.0"
+  name: compute_s3_check_rules
+  description: "Validation rules for Compute S3 bucket naming"
+  rulepack_enabled: true
+  resource_type: s3
+  account_type: compute
+  python_file_reference: s3_check.py
+
+rules:
+  CMP_S3_001:
+    name: s3_bucket_naming_and_enterprise_subgroup_check
+    description: "Validate S3 bucket naming convention for Compute accounts"
+    enabled: true
+    severity: ERROR
+    type: bucket_naming_convention_check
+    target_field: None
+    params:
+      bucket_field: bucket_name
+      min_length: 10
+      max_length: 63
+      allowed_pattern: "^${env}-cmp[1-4]{1}-[a-z][a-z0-9.-]*-(eng-assets|dp|scripts)$"
+      disallow_consecutive_dots: true
+    message: "The S3 bucket name does not follow the required Compute naming convention"
+    recommendation: "Bucket name must follow pattern: <env>-cmp<N>-<description>-(dp|scripts|eng-assets)"

@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS resources (
     derived_fields TEXT NOT NULL DEFAULT '{}',
     user_overrides TEXT NOT NULL DEFAULT '{}',
     yaml_output TEXT,
+    validation_result TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(session_id, resource_id)
 );

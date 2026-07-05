@@ -67,7 +67,7 @@ pre {
 .debug-shell {
   height: 100%;
   display: grid;
-  grid-template-columns: 290px minmax(420px, 1fr) minmax(480px, 680px);
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 16px;
   padding: 16px;
 }
@@ -367,7 +367,7 @@ p {
 .messages-box {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
   padding: 18px 16px;
   display: flex;
   flex-direction: column;
@@ -433,6 +433,8 @@ p {
   padding: 14px 16px;
   border-top: 1px solid var(--mw-border);
   background: var(--mw-surface);
+  flex-shrink: 0;
+  align-items: flex-end;
 }
 
 .composer textarea {

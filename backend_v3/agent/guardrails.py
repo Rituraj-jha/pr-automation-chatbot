@@ -278,13 +278,38 @@ async def guardrail_auto_review(
         result_data["auto_review"] = review_data
     except json.JSONDecodeError:
         result_data["auto_review"] = review_result
+        return json.dumps(result_data)
 
-    # Stop signal: tell the LLM to respond to user and NOT continue with PR
-    result_data["instruction"] = (
-        "Resource is now DONE and review passed. "
-        "STOP here — respond to the user saying the resource is ready and they can say 'create PR' when ready. "
-        "Do NOT call create_pr or any other tool in this turn."
-    )
+    if not review_data.get("pass", True):
+        # Validation FAILED — surface errors to user, stay in REVIEWING
+        errors = review_data.get("errors", [])
+        violation_count = review_data.get("violation_count", len(errors))
+        error_lines = []
+        for e in errors:
+            rule_id = e.get("rule_id", "")
+            msg = e.get("message", "")
+            field = e.get("field", "")
+            rec = e.get("recommendation", "")
+            line = f"  • [{rule_id}] {msg}"
+            if field:
+                line += f" (field: {field})"
+            if rec:
+                line += f" — {rec}"
+            error_lines.append(line)
+        error_summary = "\n".join(error_lines)
+        result_data["instruction"] = (
+            f"Review FAILED with {violation_count} error(s). "
+            f"Surface the following errors to the user and ask them to correct the flagged fields:\n"
+            f"{error_summary}\n"
+            "Do NOT call create_pr. Wait for the user to fix the fields and re-run the flow."
+        )
+    else:
+        # Validation PASSED — stop and tell user resource is ready
+        result_data["instruction"] = (
+            "Resource is now DONE and review passed. "
+            "STOP here — respond to the user saying the resource is ready and they can say 'create PR' when ready. "
+            "Do NOT call create_pr or any other tool in this turn."
+        )
 
     return json.dumps(result_data)
 
