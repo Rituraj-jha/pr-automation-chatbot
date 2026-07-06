@@ -8,16 +8,16 @@
 enterprise_to_subgroup:
   AGTR:
     required: false
-    options: [APAC, LATAM, NA, TDA, WTG]
+    options: [EMEA, NA, LATAM, APAC, WTG, WTG_CDAS, OT, CRM, TCM, MET, GLOBAL]
   CORP:
     required: true
-    options: [DTD, FIN, FSQR, GTC, CPT, EHS, DPE]
+    options: [GI_SUST, EHS, FIN, GTC, CPT, HR, AUDIT, DTD, LAW, DTD_DPE, RMG, FSQR, DTD_GIS]
   FOOD:
     required: false
-    options: [PRGL, FSGL, PR_NA]
+    options: [FSGL, FS_NA, FS_LATAM, FS_APAC, FS_EMEA, PRGL, PR_LATAM, PR_NA, PR_APAC, SALT, CE, RD]
   SPEC:
     required: false
-    options: [ANH, BIO]
+    options: [ANH, CBI, DS]
 
 # Data construct → valid data layers (glue_db only)
 # Referenced by: data_layer (depends_on: data_construct)
@@ -34,6 +34,7 @@ usage_type_to_account_type:
   DataProduct: compute
   Scripts: lakehouse
   EngAssets: lakehouse
+  Ops: lakehouse_or_compute
 
 # Data construct → account type (glue_db only)
 data_construct_to_account_type:

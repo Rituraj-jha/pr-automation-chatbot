@@ -37,6 +37,16 @@ For Glue DB today, those fields are expected to come from config as:
 - `data_owner_github_uname`
 - `data_leader`
 
+Glue DB naming conventions live in `context/shared/glue_db_naming_conventions.md`, not here.
+Do not manually derive the database name or S3 location. Let `derive_fields` call the Glue DB naming derivation logic.
+
+If `derive_fields` reports missing Glue DB naming inputs, ask only for those fields.
+Typical optional naming inputs are:
+
+- `source_system_name` when `source_name=cdp` and the actual source token is needed, such as `sap_tcl` or `iiq`.
+- `data_product_name` for DataProduct Glue DB names and S3 paths, such as `general_ledger` or `datablocks`.
+- `serving_purpose` for serving-layer DataProduct DBs that need a purpose token, such as `analytics` or `events`.
+
 When asking, show valid choices from the config, not from memory.
 If a field has options, ask the user to pick one of those exact options.
 
@@ -63,6 +73,10 @@ Examples of safe behavior:
 - Accept obvious environment synonyms only if config maps them.
 - Accept casing differences only if config/options allow normalization.
 - Use configured dependencies, such as `data_layer` depending on `data_construct`.
+- Treat Glue wording like "source db", "raw db", or "source database" as `data_construct=Source` when the config accepts that mapping.
+- Treat wording like "data product db", "curated db", or "serving db" as `data_construct=DataProduct` when the config accepts that mapping.
+- Treat layer wording like "raw serving", "raw-serving", "curated layer", or "serving layer" as the canonical `data_layer` value when validation accepts it.
+- Correct obvious spelling mistakes only for configured option/alias fields, such as "prodction" → `prd`, "sorce" → `Source`, "curted" → `curated`, or "ag tradng" → `AGTR`, after validation accepts the normalized value.
 - Do not create new option values from user wording.
 
 If user wording does not map to a configured option, ask for one valid configured option.

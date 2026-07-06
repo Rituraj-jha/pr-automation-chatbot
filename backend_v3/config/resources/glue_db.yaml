@@ -36,6 +36,11 @@ collect_fields:
       prod: prd
       develop: dev
       sandbox: snd
+      devlopment: dev
+      developmnt: dev
+      prodction: prd
+      prodution: prd
+      sandbx: snd
 
   - name: intake_id
     label: "Intake ID"
@@ -62,9 +67,22 @@ collect_fields:
     normalize:
       source: Source
       src: Source
+      raw: Source
+      source db: Source
+      source database: Source
+      raw db: Source
+      raw database: Source
+      sorce: Source
       dataproduct: DataProduct
       data product: DataProduct
+      data products: DataProduct
       dp: DataProduct
+      curated db: DataProduct
+      curated database: DataProduct
+      serving db: DataProduct
+      serving database: DataProduct
+      analytics db: DataProduct
+      data prodct: DataProduct
 
   - name: data_layer
     label: "Data Layer"
@@ -92,6 +110,16 @@ collect_fields:
     normalize:
       rawserving: raw_serving
       raw serving: raw_serving
+      raw-serving: raw_serving
+      raw serve: raw_serving
+      raw servng: raw_serving
+      cur: curated
+      curated layer: curated
+      curted: curated
+      srv: serving
+      serving layer: serving
+      servng: serving
+      internal layer: internal
 
   - name: data_env
     label: "Data Environment"
@@ -120,8 +148,15 @@ collect_fields:
       production: prd
       prod: prd
       development: dev
+      develop: dev
+      devlopment: dev
+      developmnt: dev
       staging: stg
       sandbox: snd
+      prodction: prd
+      prodution: prd
+      stage: stg
+      sandbx: snd
 
   - name: source_name
     label: "Source Name"
@@ -131,6 +166,33 @@ collect_fields:
     required: true
     placeholder: "e.g. cdp, concur, sap_tc1, jdee1, iiq"
     normalize_case: lower
+
+  - name: source_system_name
+    label: "Actual Source System Name"
+    description: "Actual source-system token used for CDP-derived Source DB names and S3 paths when source_name is cdp, such as sap_tcl or iiq."
+    group: glue_naming
+    session_reuse: false
+    required: false
+    normalize_case: lower
+    validation: "^[a-z0-9][a-z0-9_]*$"
+
+  - name: data_product_name
+    label: "Data Product Name"
+    description: "Data product token used for DataProduct Glue DB names and S3 paths, such as general_ledger, aus_dom, or datablocks."
+    group: glue_naming
+    session_reuse: false
+    required: false
+    normalize_case: lower
+    validation: "^[a-z0-9][a-z0-9_]*$"
+
+  - name: serving_purpose
+    label: "Serving Purpose"
+    description: "Optional serving-layer purpose token for DataProduct DBs, such as analytics or events."
+    group: glue_naming
+    session_reuse: false
+    required: false
+    normalize_case: lower
+    validation: "^[a-z0-9][a-z0-9_]*$"
 
   - name: enterprise_or_func_name
     label: "Enterprise"
@@ -154,11 +216,22 @@ collect_fields:
     normalize:
       agtr: AGTR
       ag trading: AGTR
+      agriculture trading: AGTR
+      agriculture and trading: AGTR
+      "ag & trading": AGTR
+      ag tradng: AGTR
       corp: CORP
       corporate: CORP
+      corprate: CORP
       food: FOOD
+      food and bio: FOOD
+      food bio industrial: FOOD
+      food bioindustrial: FOOD
       spec: SPEC
       specialized: SPEC
+      specialised: SPEC
+      specialized nutrition: SPEC
+      spcialized: SPEC
 
   - name: enterprise_or_func_subgrp_name
     label: "Subgroup"
@@ -329,6 +402,7 @@ yaml_output:
     - data_env
     - data_layer
     - source_name
+    - data_product_name
     - enterprise_or_func_name
     - enterprise_or_func_subgrp_name
     - data_owner_email

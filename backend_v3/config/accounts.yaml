@@ -82,16 +82,16 @@ enterprises:
   AGTR:
     name: "Ag & Trading"
     subgroup_required: false
-    subgroups: [APAC, LATAM, NA, TDA, WTG]
+    subgroups: [EMEA, NA, LATAM, APAC, WTG, WTG_CDAS, OT, CRM, TCM, MET, GLOBAL]
   CORP:
     name: "Corporate"
     subgroup_required: true
-    subgroups: [DTD, FIN, FSQR, GTC, CPT, EHS, DPE]
+    subgroups: [GI_SUST, EHS, FIN, GTC, CPT, HR, AUDIT, DTD, LAW, DTD_DPE, RMG, FSQR, DTD_GIS]
   FOOD:
     name: "Food"
     subgroup_required: false
-    subgroups: [PRGL, FSGL, PR_NA]
+    subgroups: [FSGL, FS_NA, FS_LATAM, FS_APAC, FS_EMEA, PRGL, PR_LATAM, PR_NA, PR_APAC, SALT, CE, RD]
   SPEC:
     name: "Specialized Portfolio"
     subgroup_required: false
-    subgroups: [ANH, BIO]
+    subgroups: [ANH, CBI, DS]

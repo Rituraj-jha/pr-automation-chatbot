@@ -29,6 +29,10 @@ collect_fields:
       production: prd
       prod: prd
       develop: dev
+      devlopment: dev
+      developmnt: dev
+      prodction: prd
+      prodution: prd
 
   - name: intake_id
     label: "Intake ID"
@@ -58,18 +62,89 @@ collect_fields:
       - value: EngAssets
         label: Eng Assets
         description: "Engineering artifacts and configs"
+      - value: Ops
+        label: Operations
+        description: "Ad-hoc operational data, reports, and safeguards"
     normalize:
       source: Source
       src: Source
+      raw: Source
+      ingestion: Source
+      ingest: Source
+      source bucket: Source
+      raw bucket: Source
+      ingestion bucket: Source
+      sorce: Source
       dataproduct: DataProduct
       data product: DataProduct
+      data products: DataProduct
       dp: DataProduct
+      curated: DataProduct
+      serving: DataProduct
+      consumption: DataProduct
+      data prodct: DataProduct
       scripts: Scripts
       script: Scripts
+      script bucket: Scripts
+      scrpts: Scripts
       engassets: EngAssets
       eng assets: EngAssets
       eng-assets: EngAssets
       engineering assets: EngAssets
+      engineering asset: EngAssets
+      eng asset: EngAssets
+      eng assests: EngAssets
+      ops: Ops
+      operations: Ops
+      operational: Ops
+      operation: Ops
+      ad hoc: Ops
+      ad-hoc: Ops
+      reports: Ops
+      csv dumps: Ops
+
+  - name: account_association
+    label: "Account Association"
+    description: "Whether this S3 bucket should be derived for Lakehouse or Compute when the usage type allows either. Source implies Lakehouse; DataProduct implies Compute."
+    group: s3_naming
+    session_reuse: false
+    required: false
+    options:
+      - value: Lakehouse
+        label: Lakehouse
+        description: "Lakehouse account naming grain"
+      - value: Compute
+        label: Compute
+        description: "Compute account naming grain"
+    normalize:
+      lakehouse: Lakehouse
+      lake house: Lakehouse
+      lh: Lakehouse
+      lh1: Lakehouse
+      compute: Compute
+      cmp: Compute
+      cmp1: Compute
+      cmp2: Compute
+      cmp3: Compute
+      cmp4: Compute
+
+  - name: source_system_name
+    label: "Source System Name"
+    description: "Source-system token for approved source-system-specific Lakehouse buckets, such as sap."
+    group: s3_naming
+    session_reuse: false
+    required: false
+    normalize_case: lower
+    validation: "^[a-z0-9][a-z0-9_-]*$"
+
+  - name: ops_identifier
+    label: "Operations Identifier"
+    description: "Optional extra operations token for ops buckets when examples require it, such as miw in dtd-miw-ops."
+    group: s3_naming
+    session_reuse: false
+    required: false
+    normalize_case: lower
+    validation: "^[a-z0-9][a-z0-9_-]*$"
 
   - name: enterprise_or_func_name
     label: "Enterprise"
@@ -93,11 +168,22 @@ collect_fields:
     normalize:
       agtr: AGTR
       ag trading: AGTR
+      agriculture trading: AGTR
+      agriculture and trading: AGTR
+      "ag & trading": AGTR
+      ag tradng: AGTR
       corp: CORP
       corporate: CORP
+      corprate: CORP
       food: FOOD
+      food and bio: FOOD
+      food bio industrial: FOOD
+      food bioindustrial: FOOD
       spec: SPEC
       specialized: SPEC
+      specialised: SPEC
+      specialized nutrition: SPEC
+      spcialized: SPEC
 
   - name: enterprise_or_func_subgrp_name
     label: "Subgroup"
@@ -144,12 +230,13 @@ derivation:
       acct_abbr: "from account lookup (lh1, cmp1..cmp4)"
       entity: "lowercase(enterprise_or_func_name)"
       subgrp: "lowercase(subgrp) — omit segment if empty"
-      suffix: "Source→src, DataProduct→dp, Scripts→scripts, EngAssets→eng-assets"
+      suffix: "Source→src, DataProduct→dp, Scripts→scripts, EngAssets→eng-assets, Ops→ops"
     suffix_map:
       Source: src
       DataProduct: dp
       Scripts: scripts
       EngAssets: eng-assets
+      Ops: ops
 
   aws_account_id:
     rules:
@@ -160,7 +247,10 @@ derivation:
         resolve: "compute account matching enterprise"
         default_plat_env: prd
       - condition: "usage_type in [Scripts, EngAssets]"
-        resolve: "default to lakehouse; if enterprise has dedicated compute, use that"
+        resolve: "use account_association when supplied; if missing, LLM derivation should ask for Lakehouse or Compute"
+        default_plat_env: prd
+      - condition: "usage_type == Ops"
+        resolve: "use account_association when supplied; if missing, LLM derivation should ask for Lakehouse or Compute"
         default_plat_env: prd
 
   bucket_description:
@@ -198,6 +288,7 @@ constraints:
     DataProduct: compute
     Scripts: lakehouse
     EngAssets: lakehouse
+    Ops: lakehouse_or_compute
 
 # Validations run after derivation (reviewer uses these)
 validations:
@@ -219,7 +310,7 @@ validations:
     check_field: bucket_name
     suffix_from: derivation.bucket_name.suffix_map
     key_field: usage_type
-    error: "Bucket name suffix must match usage_type (src/dp/scripts/eng-assets)"
+    error: "Bucket name suffix must match usage_type (src/dp/scripts/eng-assets/ops)"
 
   - name: subgrp_for_corp
     type: required_if
