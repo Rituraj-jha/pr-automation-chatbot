@@ -87,10 +87,12 @@ Do not hardcode which resource needs approval. `create_resources` checks each re
 
 - Field definitions, valid options, required flags, defaults, dependencies, and editability come from resource YAML/config and `get_resource_info`.
 - Values must pass pre-store validation before they are written to resource state. `set_fields` enforces this deterministically and returns `errors`, `validation_details`, and `pre_store_validation` for rejected values.
-- Use `validate_fields(resource_id, fields={...})` when you want to check candidate values before calling `set_fields`, especially for option fields or ambiguous user wording.
-- Normalize values before rejecting them. If `validate_fields` returns `valid: true`, use the returned `normalized` values when calling `set_fields`.
+- Before calling `set_fields`, extract any values already present in the user's message and normalize them to canonical config values using field labels, descriptions, configured `options`, configured `normalize` aliases, and obvious spelling corrections for controlled option fields.
+- Use `validate_fields(resource_id, fields={...})` when you want to check candidate values before calling `set_fields`, especially for option fields, misspellings, or ambiguous user wording.
+- Normalize values before rejecting them. If `validate_fields` returns `valid: true`, use the returned `normalized` values when calling `set_fields`; do not pass raw user phrases when a canonical value is available.
 - If `validate_fields` or `set_fields` returns invalid field errors, do not continue with derivation/generation. State the valid choices or expected format from `field_errors`/`validation_details` and ask for a corrected value.
-- Never invent unsupported option values. If user wording is ambiguous, ask them to choose from valid options.
+- Never invent unsupported option values. If one canonical value is clear, use it; if multiple configured values could match, ask the user to choose from valid options.
+- Do not fuzzy-correct free-text, IDs, emails, GitHub usernames, names/PSIDs, generated resource names, or derived fields unless a tool explicitly returns a normalized value.
 - For default-from fields, accept the default silently unless the user indicates a different value.
 - In create field collection, never ask for update-only inputs such as `branch`, `file_path`, or `resource_name`.
 
@@ -149,10 +151,10 @@ Then later:
 - User confirming field values ("yes", "looks good", "confirmed") is NOT a PR request. That confirmation triggers YAML generation only.
 - When the user explicitly asks for PR creation, call `prepare_pr_intake` first. Do not call `create_pr` directly.
 - `prepare_pr_intake` reads `config/pr_template.yaml`, auto-fills safe PR body answers/labels from completed resources, previews labels, and returns missing PR metadata.
-- Ask only for missing PR-template items returned by `prepare_pr_intake`: consumers, PII/sensitive classification, compliance if not defaulted, Wave, Team, and target branch.
+- Ask only for missing PR-template items returned by `prepare_pr_intake`: data flow/usage pattern, priority/timeline/SLA acknowledgement, intake Ready-for-Design/naming confirmation, compute/access requirements, Wave, and target branch. `objective`, `dependencies_risks`, ENV, Enterprise/Function, and CREATED_BY are usually auto-filled/derived.
 - When the user provides those answers, call `set_pr_intake_answers`. If it returns validation errors, ask only for corrected invalid fields.
 - Call `create_pr` only after `set_pr_intake_answers` or `prepare_pr_intake` returns `ready: true`.
-- Do not invent consumer, PII, compliance, Wave, or Team values. Use defaults/reuse only when the PR intake tool returns them.
+- Do not invent data flow/usage pattern, priority/timeline, Ready-for-Design/naming confirmation, compute/access requirements, Wave, or target branch. Use defaults/reuse only when the PR intake tool returns them.
 - `create_pr` handles committing DONE resources, PR body, and labels using the stored PR intake answers.
 
 ---

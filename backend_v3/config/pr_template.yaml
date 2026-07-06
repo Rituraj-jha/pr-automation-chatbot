@@ -2,8 +2,8 @@
 # Defines intake questions, auto-fill strategies, labels, and body formatting.
 # Used by: pr_tools.py (create_pr), system.md (LLM guidance), frontend (PR form).
 
-# Intake questions — asked before PR creation
-# auto_fill: strategy to derive answer without asking (null = always ask)
+# Intake questions — prepared before PR creation
+# auto_fill: strategy to derive answer without asking (null = ask unless default is present)
 intake_questions:
   - id: objective
     question: "What is the objective of this request?"
@@ -13,39 +13,36 @@ intake_questions:
       template: "Provision {resource_count} {resource_types} for {enterprise} in {plat_env}"
     example: "Provision S3 source bucket and Glue database for AGTR APAC in production"
 
-  - id: intake_approval
-    question: "Has this been approved via intake process? (Intake ID)"
+  - id: data_flow_or_usage_pattern
+    question: "What is the data flow or usage pattern (batch / streaming / hybrid / ad-hoc)?"
     required: true
-    auto_fill:
-      strategy: from_session_field
-      field: intake_id
-    example: "Yes — M0000485"
-
-  - id: data_flow
-    question: "Describe the data flow classification (source system → destination)"
-    required: true
-    auto_fill: null  # always ask
-    example: "SAP TC1 → Raw → Raw Serving (AGTR APAC)"
-
-  - id: consumers
-    question: "Who are the downstream consumers of this data?"
-    required: true
-    auto_fill: null  # always ask
-    example: "Finance reporting team, BI dashboards"
-
-  - id: pii
-    question: "Does this resource contain PII/sensitive data?"
-    required: true
-    auto_fill: null  # always ask
-    options: ["Yes", "No", "Unknown — pending classification"]
-    example: "No"
-
-  - id: compliance
-    question: "Any compliance/regulatory requirements? (GDPR, SOX, etc.)"
-    required: false
     auto_fill: null
-    default: "None"
-    example: "SOX compliance required for financial data"
+    example: "Batch ingestion"
+
+  - id: priority_timeline
+    question: "What is the priority and timeline for this request? Are you aware of MIW's SLA of 72 hours?"
+    required: true
+    auto_fill: null
+    example: "High priority; aware of MIW's 72-hour SLA"
+
+  - id: intake_ready_and_naming
+    question: "Has the intake request been approved and is it in Ready for Design state? Have you followed MIW naming conventions?"
+    required: true
+    auto_fill: null
+    example: "Yes, intake is approved/Ready for Design and naming conventions have been followed"
+
+  - id: compute_access_requirements
+    question: "What are the compute and access requirements (size recommendations, entitlements/roles, access mode)?"
+    required: true
+    auto_fill: null
+    example: "Small; standard data consumer role access"
+
+  - id: dependencies_risks
+    question: "Are there any dependencies, risks, or special considerations we should know before approving this request?"
+    required: true
+    auto_fill: null
+    default: "No known dependencies, risks, or special considerations."
+    example: "No"
 
 # Labels applied to PR
 # derive: how to compute label value from session context
@@ -59,33 +56,19 @@ labels:
     values: [dev, prd, snd]
     required: true
 
-  - prefix: "Enterprise"
+  - prefix: "Enterprise/Function"
     derive:
-      strategy: from_resource_field
-      field: enterprise_or_func_name
-    values: [AGTR, CORP, FOOD, SPEC]
+      strategy: combine_resource_fields
+      fields: [enterprise_or_func_name, enterprise_or_func_subgrp_name]
+      separator: "-"
+      skip_empty_parts: true
     required: true
-
-  - prefix: "Subgroup"
-    derive:
-      strategy: from_resource_field
-      field: enterprise_or_func_subgrp_name
-    skip_if_empty: true
-    required: false
 
   - prefix: "Wave"
     derive: null  # always ask
     ask: "Which wave does this belong to?"
-    values: [W1, W2, W3, W4]
+    values: [W0, W1, W1.1, W1.2, W2.1, W2.2]
     session_reuse: true  # remember within session
-    required: true
-
-  - prefix: "Team"
-    derive: null  # always ask first time, then remember
-    ask: "Which team owns this request?"
-    values: [DataEng, Analytics, Platform, Governance]
-    session_reuse: true
-    profile_reuse: true  # store in user_profile for future sessions
     required: true
 
   # Static label — always applied, never asked
@@ -96,19 +79,49 @@ labels:
 # PR body template (Markdown)
 # Placeholders: {intake_answers.*}, {resource_summary}, {labels_list}
 body_template: |
-  ## MIW Object Provisioning Request
+  ### 📢 **Mandatory – Read and Align Before Raising PR**
+  #### ⚠️⚠️⚠️Champions own review/merge for federated objects, MIW will only review non-federated or escalations⚠️⚠️⚠️
+  #### ⚠️⚠️⚠️Mandatory Labels on PR: ENV | Wave | Enterprise/Function | CREATED_BY:MiNi⚠️⚠️⚠️
+  #### ⚠️⚠️⚠️If you still wish to get review done by MIW, attach label `REVIEW_OWNERSHIP:MIW`⚠️⚠️⚠️
+  #### ⚠️⚠️⚠️Ensure logically scoped and correctly grouped objects - Read [PR Submission Guide](https://cargillonline.sharepoint.com/sites/minervacentral/SitePages/PR-Submission-Guide.aspx)⚠️⚠️⚠️
+  #### 💡💡💡Understand how to raise PR in [Video Guide](https://cargillonline.sharepoint.com/sites/Minerva-FullTeam/_layouts/15/stream.aspx?id=%2Fsites%2FMinerva%2DFullTeam%2FShared%20Documents%2FInformation%20Warehouse%2FMIW%5FVideo%5FSeries%5FGuide%5FRaising%5F%26%5FReviewing%5FPRs%2FVideo11%20%2D%20Prerequisites%20%E2%80%93%20Raising%20and%20Reviewing%20a%20PR%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview%2Edb820636%2D38bc%2D4ede%2Da679%2Dceec6b69c21f)💡💡💡
+  #### 💡💡💡Learn to review [pipeline run logs](https://cargillonline.sharepoint.com/:v:/r/sites/Minerva-FullTeam/Shared%20Documents/Information%20Warehouse/MIW_Video_Series_Guide_Raising_%26_Reviewing_PRs/Video17%20-%20Viewing%20PR%20Logs%20Through%20Datadog.mov?csf=1&web=1&e=1OitzT)💡💡💡
+  #### 💡💡💡Link to [MIW's Full Video Guide](https://cargillonline.sharepoint.com/:f:/r/sites/Minerva-FullTeam/Shared%20Documents/Information%20Warehouse/MIW_Video_Series_Guide_Raising_%26_Reviewing_PRs?csf=1&web=1&e=tgKjNK)💡💡💡
 
-  ### Intake Information
-  | Question | Answer |
-  |----------|--------|
-  | Objective | {intake_answers.objective} |
-  | Intake Approval | {intake_answers.intake_approval} |
-  | Data Flow | {intake_answers.data_flow} |
-  | Consumers | {intake_answers.consumers} |
-  | PII/Sensitive | {intake_answers.pii} |
-  | Compliance | {intake_answers.compliance} |
+  ### Request Intake Template
 
-  ### Resources
+  #### 1. What is the objective of this request?  
+  Please describe the use case or business purpose.  
+  > {intake_answers.objective}
+
+  ---
+
+  #### 2. What is the data flow or usage pattern (batch / streaming / hybrid / ad-hoc)?  
+  > {intake_answers.data_flow_or_usage_pattern}
+
+  ---
+
+  #### 3. What is the priority and timeline for this request? Are you aware of MIW's SLA of 72 hours?  
+  > {intake_answers.priority_timeline}
+
+  ---
+
+  #### 4. Has the intake request been approved and is it in “Ready for Design” state? Have you followed MIW naming conventions?  
+  > {intake_answers.intake_ready_and_naming}
+
+  ---
+
+  #### 5. What are the compute and access requirements (size recommendations, entitlements/roles, access mode)?  
+  > {intake_answers.compute_access_requirements}
+
+  ---
+
+  #### 6. Are there any dependencies, risks, or special considerations we should know before approving this request?  
+  > {intake_answers.dependencies_risks}
+
+  ---
+
+  ### Resources Generated by MiNi
   {resource_summary}
 
   ### Labels

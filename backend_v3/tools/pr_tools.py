@@ -182,7 +182,7 @@ def _label_answer_field(label_def: dict) -> str:
 def _question_auto_fill(question: dict, resources: list[Resource], session_fields: dict[str, str]) -> str | None:
     auto_fill = question.get("auto_fill")
     if not auto_fill:
-        if not question.get("required", False) and question.get("default") is not None:
+        if question.get("default") is not None:
             return str(question.get("default"))
         return None
 
@@ -250,20 +250,14 @@ async def _build_pr_intake_status(session: Session, target_branch: str = "") -> 
             intake_answers[qid] = derived
             auto_filled[qid] = derived
 
-    # Data flow is safe to draft from resource fields; user can override it.
-    if not intake_answers.get("data_flow"):
-        derived_flow = _derive_data_flow(resources)
-        intake_answers["data_flow"] = derived_flow
-        auto_filled["data_flow"] = derived_flow
-
     # Apply optional defaults.
     for question in template.get("intake_questions", []):
         qid = question.get("id")
-        if qid and not intake_answers.get(qid) and not question.get("required", False) and question.get("default") is not None:
+        if qid and not intake_answers.get(qid) and question.get("default") is not None:
             intake_answers[qid] = str(question.get("default"))
             auto_filled[qid] = str(question.get("default"))
 
-    # Reuse session-level answers for ask labels such as Wave/Team.
+    # Reuse session-level answers for ask labels such as Wave.
     for label_def in template.get("labels", []):
         if label_def.get("derive") or label_def.get("static"):
             continue
@@ -328,26 +322,21 @@ def _derive_labels(
 ) -> list[str]:
     """Derive PR labels from resource fields and intake answers.
 
-    Returns list of label strings like ["ENV:prd", "Enterprise:AGTR", "CREATED_BY:MiNi"].
+    Returns list of label strings like ["ENV:prd", "Enterprise/Function:AGTR-APAC", "CREATED_BY:MiNi"].
     """
     template = _load_pr_template()
     label_defs = template.get("labels", [])
     labels: list[str] = []
 
-    # Collect field values from all resources for derivation
-    all_plat_envs = set()
-    all_enterprises = set()
-    all_subgroups = set()
+    # Collect field values from all resources for derivation.
+    all_field_values: dict[str, set[str]] = {}
 
     for r in resources:
         fields = r.get("fields", {})
-        if fields.get("plat_env"):
-            all_plat_envs.add(fields["plat_env"])
-        if fields.get("enterprise_or_func_name"):
-            all_enterprises.add(fields["enterprise_or_func_name"])
-        subgrp = fields.get("enterprise_or_func_subgrp_name", "")
-        if subgrp:
-            all_subgroups.add(subgrp)
+        for field_name, value in fields.items():
+            if value is None or str(value).strip() == "":
+                continue
+            all_field_values.setdefault(field_name, set()).add(str(value).strip())
 
     for label_def in label_defs:
         # Static labels (always applied)
@@ -369,17 +358,29 @@ def _derive_labels(
         derive = label_def.get("derive")
         if derive and derive.get("strategy") == "from_resource_field":
             field = derive.get("field", "")
-            if field == "plat_env":
-                for val in all_plat_envs:
-                    labels.append(f"{prefix}:{val}")
-            elif field == "enterprise_or_func_name":
-                for val in all_enterprises:
-                    labels.append(f"{prefix}:{val}")
-            elif field == "enterprise_or_func_subgrp_name":
-                if label_def.get("skip_if_empty") and not all_subgroups:
-                    continue
-                for val in all_subgroups:
-                    labels.append(f"{prefix}:{val}")
+            values = all_field_values.get(field, set())
+            if label_def.get("skip_if_empty") and not values:
+                continue
+            for val in sorted(values):
+                labels.append(f"{prefix}:{val}")
+        elif derive and derive.get("strategy") == "combine_resource_fields":
+            fields_to_combine = derive.get("fields", []) or []
+            separator = str(derive.get("separator", "-"))
+            skip_empty_parts = bool(derive.get("skip_empty_parts", True))
+            combined_values = set()
+            for resource in resources:
+                resource_fields = resource.get("fields", {})
+                parts = []
+                for field in fields_to_combine:
+                    value = str(resource_fields.get(field, "") or "").strip()
+                    if not value and skip_empty_parts:
+                        continue
+                    parts.append(value)
+                combined = separator.join(part for part in parts if part or not skip_empty_parts).strip(separator)
+                if combined:
+                    combined_values.add(combined)
+            for val in sorted(combined_values):
+                labels.append(f"{prefix}:{val}")
 
     return labels
 

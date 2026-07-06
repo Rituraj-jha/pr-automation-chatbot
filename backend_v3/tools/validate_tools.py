@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -47,22 +48,120 @@ def _load_resource_config(resource_type: str) -> dict | None:
         return yaml.safe_load(f)
 
 
-def _stage1_normalize(field_name: str, value: Any, field_spec: dict) -> Any:
+def _normalize_key(value: Any) -> str:
+    """Normalize text for alias/fuzzy comparison without changing stored values."""
+    text = str(value or "").lower().replace("&", " and ")
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def _normalization_candidates(field_spec: dict) -> list[tuple[str, str, str]]:
+    """Return (candidate_text, canonical_value, source) pairs from config."""
+    candidates: list[tuple[str, str, str]] = []
+
+    for alias, canonical in (field_spec.get("normalize", {}) or {}).items():
+        candidates.append((str(alias), str(canonical), "normalize"))
+
+    for opt in field_spec.get("options", []) or []:
+        if isinstance(opt, dict):
+            value = str(opt.get("value", ""))
+            label = str(opt.get("label", ""))
+            if value:
+                candidates.append((value, value, "option_value"))
+            if label:
+                candidates.append((label, value, "option_label"))
+        else:
+            value = str(opt)
+            candidates.append((value, value, "option_value"))
+
+    return [(candidate, canonical, source) for candidate, canonical, source in candidates if candidate and canonical]
+
+
+def _fuzzy_normalize(str_value: str, field_spec: dict) -> tuple[Any, dict[str, Any] | None]:
+    """Safely fuzzy-match misspelled values against configured aliases/options only."""
+    candidates = _normalization_candidates(field_spec)
+    if not candidates:
+        return str_value, None
+
+    lookup_key = _normalize_key(str_value)
+    if len(lookup_key) < 4:
+        return str_value, None
+
+    scored: list[tuple[float, str, str, str]] = []
+    for candidate, canonical, source in candidates:
+        candidate_key = _normalize_key(candidate)
+        if not candidate_key:
+            continue
+        if candidate_key == lookup_key:
+            return canonical, {
+                "original": str_value,
+                "normalized": canonical,
+                "method": source,
+                "matched": candidate,
+            }
+        score = SequenceMatcher(None, lookup_key, candidate_key).ratio()
+        scored.append((score, candidate, canonical, source))
+
+    if not scored:
+        return str_value, None
+
+    scored.sort(reverse=True, key=lambda item: item[0])
+    best_score, best_candidate, best_canonical, best_source = scored[0]
+    cutoff = 0.86 if len(lookup_key) <= 5 else 0.82
+    if best_score < cutoff:
+        return str_value, None
+
+    close_canonicals = {
+        canonical
+        for score, _candidate, canonical, _source in scored
+        if score >= best_score - 0.03
+    }
+    if len(close_canonicals) > 1:
+        return str_value, None
+
+    return best_canonical, {
+        "original": str_value,
+        "normalized": best_canonical,
+        "method": "fuzzy",
+        "matched": best_candidate,
+        "score": round(best_score, 3),
+        "source": best_source,
+    }
+
+
+def _stage1_normalize_with_detail(field_name: str, value: Any, field_spec: dict) -> tuple[Any, dict[str, Any] | None]:
     """Stage 1: Normalize value using field spec rules."""
     if value is None:
-        return value
+        return value, None
     str_value = str(value).strip()
 
     # Case normalization
     if field_spec.get("normalize_case") == "upper":
-        return str_value.upper()
+        normalized = str_value.upper()
+        return normalized, {
+            "original": str_value,
+            "normalized": normalized,
+            "method": "case_upper",
+        } if normalized != str_value else None
+    if field_spec.get("normalize_case") == "lower":
+        normalized = str_value.lower()
+        return normalized, {
+            "original": str_value,
+            "normalized": normalized,
+            "method": "case_lower",
+        } if normalized != str_value else None
 
     # Lookup normalization
     normalize_map = field_spec.get("normalize", {})
     if normalize_map:
         lookup = str_value.lower()
         if lookup in normalize_map:
-            return normalize_map[lookup]
+            normalized = normalize_map[lookup]
+            return normalized, {
+                "original": str_value,
+                "normalized": normalized,
+                "method": "normalize",
+                "matched": lookup,
+            } if normalized != str_value else None
 
     # Options case-insensitive match
     options = field_spec.get("options", [])
@@ -70,9 +169,24 @@ def _stage1_normalize(field_name: str, value: Any, field_spec: dict) -> Any:
         for opt in options:
             opt_val = opt["value"] if isinstance(opt, dict) else str(opt)
             if opt_val.lower() == str_value.lower():
-                return opt_val
+                return opt_val, {
+                    "original": str_value,
+                    "normalized": opt_val,
+                    "method": "option_case",
+                    "matched": opt_val,
+                } if opt_val != str_value else None
 
-    return str_value
+    fuzzy_value, fuzzy_detail = _fuzzy_normalize(str_value, field_spec)
+    if fuzzy_detail:
+        return fuzzy_value, fuzzy_detail
+
+    return str_value, None
+
+
+def _stage1_normalize(field_name: str, value: Any, field_spec: dict) -> Any:
+    """Stage 1: Normalize value using field spec rules."""
+    normalized, _detail = _stage1_normalize_with_detail(field_name, value, field_spec)
+    return normalized
 
 
 def _extract_option_values(options: list) -> list[str]:
@@ -165,6 +279,7 @@ def validate_collect_fields(
 
     field_specs = _collect_field_specs(config)
     normalized: dict[str, Any] = {}
+    normalization_details: dict[str, dict[str, Any]] = {}
     field_errors: dict[str, dict[str, Any]] = {}
     cross_field_errors: list[str] = []
     warnings: list[str] = []
@@ -178,8 +293,10 @@ def validate_collect_fields(
             )
             continue
 
-        norm_value = _stage1_normalize(field_name, value, field_spec)
+        norm_value, norm_detail = _stage1_normalize_with_detail(field_name, value, field_spec)
         normalized[field_name] = norm_value
+        if norm_detail:
+            normalization_details[field_name] = norm_detail
 
         allow_empty = bool(field_spec.get("allow_empty", False))
         if allow_empty and str(norm_value) == "":
@@ -221,6 +338,7 @@ def validate_collect_fields(
         "field_errors": field_errors,
         "cross_field_errors": cross_field_errors,
         "normalized": normalized,
+        "normalization_details": normalization_details,
         "warnings": warnings,
     }
 
@@ -306,7 +424,9 @@ async def validate_fields(resource_id: str, fields: dict | None = None, **kwargs
         "cross_field_errors": validation["cross_field_errors"] if validation["cross_field_errors"] else None,
         "warnings": validation["warnings"] if validation["warnings"] else None,
         "normalized": validation["normalized"],
+        "normalization_details": validation.get("normalization_details") or None,
         "instruction": (
+            "If valid is true, call set_fields with the returned normalized values. "
             "If valid is false, do not call set_fields for invalid values. "
             "Ask the user to correct the listed fields using allowed_values/expected_format."
         ),

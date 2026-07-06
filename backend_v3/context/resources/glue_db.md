@@ -63,6 +63,10 @@ Examples of safe behavior:
 - Accept obvious environment synonyms only if config maps them.
 - Accept casing differences only if config/options allow normalization.
 - Use configured dependencies, such as `data_layer` depending on `data_construct`.
+- Treat Glue wording like "source db", "raw db", or "source database" as `data_construct=Source` when the config accepts that mapping.
+- Treat wording like "data product db", "curated db", or "serving db" as `data_construct=DataProduct` when the config accepts that mapping.
+- Treat layer wording like "raw serving", "raw-serving", "curated layer", or "serving layer" as the canonical `data_layer` value when validation accepts it.
+- Correct obvious spelling mistakes only for configured option/alias fields, such as "prodction" → `prd`, "sorce" → `Source`, "curted" → `curated`, or "ag tradng" → `AGTR`, after validation accepts the normalized value.
 - Do not create new option values from user wording.
 
 If user wording does not map to a configured option, ask for one valid configured option.

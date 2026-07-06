@@ -141,7 +141,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "set_fields",
-            "description": "Set collected field values on a resource after extracting from user message. Handles normalization and validation. When all required fields are set, derivation runs automatically.",
+            "description": "Set collected field values on a resource after extracting from the user message. Pass canonical values whenever possible using get_resource_info options/normalize hints or validate_fields normalized output. The backend still normalizes/validates controlled fields and rejects invalid values. When all required fields are set, derivation runs automatically.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -151,7 +151,7 @@ TOOL_SCHEMAS: list[dict] = [
                     },
                     "fields": {
                         "type": "object",
-                        "description": "Key-value pairs of field names and their values",
+                        "description": "Key-value pairs of collected field names and canonical values. Do not include derived fields. Normalize obvious synonyms/spelling for controlled fields before calling, e.g. production→prd when config supports it. If uncertain, call validate_fields first and use its normalized values.",
                     },
                 },
                 "required": ["resource_id", "fields"],
@@ -256,7 +256,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "validate_fields",
-            "description": "Pre-store validation for collected field values. Validates candidate fields against resource config before set_fields writes them to state: normalizes values, rejects unknown fields, enforces allowed options/regex, and runs dependent/cross-field checks. If invalid, use field_errors to ask for corrected values instead of calling set_fields for those values.",
+            "description": "Pre-store validation for collected field values. Validates candidate fields against resource config before set_fields writes them to state: normalizes aliases/case/obvious spelling mistakes for controlled option fields, rejects unknown fields, enforces allowed options/regex, and runs dependent/cross-field checks. If valid, call set_fields with normalized values. If invalid, use field_errors to ask for corrected values instead of calling set_fields for those values.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -266,7 +266,7 @@ TOOL_SCHEMAS: list[dict] = [
                     },
                     "fields": {
                         "type": "object",
-                        "description": "Candidate field values to validate before set_fields. If omitted, validates current collected state.",
+                        "description": "Candidate collected-field values to validate before set_fields. May include natural user wording for controlled fields; backend returns normalized canonical values when safe. If omitted, validates current collected state.",
                     },
                 },
                 "required": ["resource_id"],
@@ -540,17 +540,17 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "set_pr_intake_answers",
-            "description": "Store and validate user-provided PR template answers before create_pr. Validates configured options such as PII, Wave, and Team. Returns readiness; call create_pr only when ready is true.",
+            "description": "Store and validate user-provided PR template answers before create_pr. Validates configured options such as Wave. Returns readiness; call create_pr only when ready is true.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "intake_answers": {
                         "type": "object",
-                        "description": "PR intake answers keyed by pr_template.yaml question id, e.g. {\"consumers\": \"Analytics team\", \"pii\": \"No\", \"compliance\": \"None\"}.",
+                        "description": "PR intake answers keyed by pr_template.yaml question id, e.g. {\"data_flow_or_usage_pattern\": \"Batch ingestion\", \"priority_timeline\": \"High priority; aware of MIW's 72-hour SLA\", \"compute_access_requirements\": \"Small\"}.",
                     },
                     "label_answers": {
                         "type": "object",
-                        "description": "PR label answers keyed by label prefix for ask labels, e.g. {\"Wave\": \"W2\", \"Team\": \"DataEng\"}.",
+                        "description": "PR label answers keyed by label prefix for ask labels, e.g. {\"Wave\": \"W2\"}.",
                     },
                     "target_branch": {
                         "type": "string",
