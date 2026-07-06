@@ -167,6 +167,33 @@ collect_fields:
     placeholder: "e.g. cdp, concur, sap_tc1, jdee1, iiq"
     normalize_case: lower
 
+  - name: source_system_name
+    label: "Actual Source System Name"
+    description: "Actual source-system token used for CDP-derived Source DB names and S3 paths when source_name is cdp, such as sap_tcl or iiq."
+    group: glue_naming
+    session_reuse: false
+    required: false
+    normalize_case: lower
+    validation: "^[a-z0-9][a-z0-9_]*$"
+
+  - name: data_product_name
+    label: "Data Product Name"
+    description: "Data product token used for DataProduct Glue DB names and S3 paths, such as general_ledger, aus_dom, or datablocks."
+    group: glue_naming
+    session_reuse: false
+    required: false
+    normalize_case: lower
+    validation: "^[a-z0-9][a-z0-9_]*$"
+
+  - name: serving_purpose
+    label: "Serving Purpose"
+    description: "Optional serving-layer purpose token for DataProduct DBs, such as analytics or events."
+    group: glue_naming
+    session_reuse: false
+    required: false
+    normalize_case: lower
+    validation: "^[a-z0-9][a-z0-9_]*$"
+
   - name: enterprise_or_func_name
     label: "Enterprise"
     description: "Enterprise or functional area"
@@ -375,6 +402,7 @@ yaml_output:
     - data_env
     - data_layer
     - source_name
+    - data_product_name
     - enterprise_or_func_name
     - enterprise_or_func_subgrp_name
     - data_owner_email

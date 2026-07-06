@@ -37,6 +37,16 @@ For Glue DB today, those fields are expected to come from config as:
 - `data_owner_github_uname`
 - `data_leader`
 
+Glue DB naming conventions live in `context/shared/glue_db_naming_conventions.md`, not here.
+Do not manually derive the database name or S3 location. Let `derive_fields` call the Glue DB naming derivation logic.
+
+If `derive_fields` reports missing Glue DB naming inputs, ask only for those fields.
+Typical optional naming inputs are:
+
+- `source_system_name` when `source_name=cdp` and the actual source token is needed, such as `sap_tcl` or `iiq`.
+- `data_product_name` for DataProduct Glue DB names and S3 paths, such as `general_ledger` or `datablocks`.
+- `serving_purpose` for serving-layer DataProduct DBs that need a purpose token, such as `analytics` or `events`.
+
 When asking, show valid choices from the config, not from memory.
 If a field has options, ask the user to pick one of those exact options.
 

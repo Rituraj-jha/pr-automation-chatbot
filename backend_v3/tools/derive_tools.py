@@ -18,6 +18,7 @@ _CONTEXT_DIR = Path(__file__).resolve().parent.parent / "context"
 # Cache
 _accounts: list[dict] | None = None
 _s3_naming_context: str | None = None
+_glue_db_naming_context: str | None = None
 
 
 def _load_accounts() -> list[dict]:
@@ -47,6 +48,18 @@ def _load_s3_naming_context() -> str:
         else:
             _s3_naming_context = "S3 naming convention context is unavailable."
     return _s3_naming_context
+
+
+def _load_glue_db_naming_context() -> str:
+    """Load the dedicated Glue DB naming convention reference for LLM derivation."""
+    global _glue_db_naming_context
+    if _glue_db_naming_context is None:
+        path = _CONTEXT_DIR / "shared" / "glue_db_naming_conventions.md"
+        if path.exists():
+            _glue_db_naming_context = path.read_text(encoding="utf-8")
+        else:
+            _glue_db_naming_context = "Glue DB naming convention context is unavailable."
+    return _glue_db_naming_context
 
 
 def _extract_json_object(text: str | None) -> dict[str, Any]:
@@ -168,124 +181,96 @@ async def _derive_s3_fields_with_llm(collected: dict[str, Any]) -> tuple[dict[st
     return clean_derived, metadata
 
 
-def _derive_glue_db_fields(collected: dict[str, Any]) -> dict[str, Any]:
-    """Derive Glue DB fields from collected values.
+def _glue_db_llm_payload(collected: dict[str, Any], config: dict) -> dict[str, Any]:
+    """Build the compact data payload sent to the Glue DB derivation LLM."""
+    return {
+        "collected_fields": collected,
+        "accounts": _load_accounts(),
+        "configured_derivation": config.get("derivation", {}),
+        "derive_fields_required": [field.get("name") for field in config.get("derive_fields", [])],
+        "minimal_tool_contract": {
+            "derived_fields_required": ["database_name", "database_s3_location", "database_description", "aws_account_id", "region"],
+            "missing_inputs_behavior": "If you cannot confidently derive, return can_derive=false and list missing_inputs. Do not invent governance-sensitive values.",
+        },
+    }
 
-    Handles complex naming patterns based on:
-    - data_construct (Source → lakehouse / DataProduct → compute)
-    - data_layer (raw, raw_serving, curated, serving, internal)
-    - source_name (cdp triggers lh_cdp_ prefix)
-    - enterprise/subgroup (bucket path matching)
-    """
-    derived = {}
-    accounts = _load_accounts()
 
-    plat_env = collected.get("plat_env", "prd")
-    data_construct = collected.get("data_construct", "")
-    data_layer = collected.get("data_layer", "")
-    data_env = collected.get("data_env", plat_env)
-    source_name = collected.get("source_name", "").lower().strip()
-    enterprise = collected.get("enterprise_or_func_name", "")
-    subgroup = collected.get("enterprise_or_func_subgrp_name", "")
+async def _derive_glue_db_fields_with_llm(collected: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Use LLM-first Glue DB derivation with only minimal Python shape checks."""
+    config = _load_resource_config("glue_db")
+    naming_context = _load_glue_db_naming_context()
+    payload = _glue_db_llm_payload(collected, config)
 
-    # 1. region — always us-east-1
-    derived["region"] = "us-east-1"
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are the Glue Database naming derivation engine for Minerva/MiNi. "
+                "Use the provided Glue DB naming convention reference and collected fields. "
+                "Return only a JSON object. Do not use markdown. Do not call tools. "
+                "Do not invent missing governance-sensitive values. "
+                "Do not perform reviewer-style policy validation; choose the best convention and derive candidate fields."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Glue DB naming convention reference:\n{naming_context}\n\n"
+                "Input payload:\n"
+                f"{json.dumps(payload, indent=2)}\n\n"
+                "Return this exact JSON shape:\n"
+                "{\n"
+                "  \"can_derive\": true,\n"
+                "  \"missing_inputs\": [],\n"
+                "  \"derived_fields\": {\n"
+                "    \"database_name\": \"...\",\n"
+                "    \"database_s3_location\": \"s3://.../\",\n"
+                "    \"database_description\": \"...\",\n"
+                "    \"aws_account_id\": \"...\",\n"
+                "    \"region\": \"us-east-1\"\n"
+                "  },\n"
+                "  \"derivation\": {\n"
+                "    \"convention\": \"...\",\n"
+                "    \"account_association\": \"Lakehouse|Compute|Unknown\",\n"
+                "    \"aws_account_abbreviation\": \"...\",\n"
+                "    \"source_or_product_token\": \"...\",\n"
+                "    \"s3_location_pattern\": \"...\",\n"
+                "    \"confidence\": 0.0,\n"
+                "    \"reasoning\": \"short reason\"\n"
+                "  }\n"
+                "}\n"
+                "If any needed value is missing, return can_derive=false, missing_inputs with field names/descriptions, and no derived_fields."
+            ),
+        },
+    ]
 
-    # 2. aws_account_id — Source → lakehouse, DataProduct → compute
-    account = None
-    if data_construct == "Source":
-        account = next(
-            (a for a in accounts if a["type"] == "lakehouse" and a["plat_env"] == plat_env),
-            None,
-        )
-    elif data_construct == "DataProduct":
-        account = next(
-            (a for a in accounts if a["type"] == "compute" and a["plat_env"] == plat_env and a["enterprise"] == enterprise),
-            None,
-        )
+    response = await chat_with_tools(messages)
+    parsed = _extract_json_object(response.get("content"))
 
-    if account:
-        derived["aws_account_id"] = account["id"]
-        acct_abbr = account["abbreviation"]
-    else:
-        derived["aws_account_id"] = "UNKNOWN"
-        acct_abbr = f"{plat_env}-lh1"
+    metadata = {
+        "strategy": "llm_first",
+        "llm_response": parsed,
+    }
 
-    # 3. database_name — complex naming per convention
-    is_cdp = source_name == "cdp"
+    missing_inputs = parsed.get("missing_inputs") or []
+    if parsed.get("can_derive") is False or missing_inputs:
+        metadata["missing_inputs"] = missing_inputs
+        return None, metadata
 
-    if data_construct == "Source":
-        # Lakehouse naming: lh_{cdp_}{source}_{layer}_{plat_env}
-        if is_cdp:
-            # For CDP, the actual source system is typically captured differently
-            # Pattern: lh_cdp_{actual_source}_{layer}_{plat_env}
-            # But source_name field IS "cdp" — we use just "cdp" in the name
-            # unless there's additional source info embedded
-            db_name = f"lh_cdp_{source_name}_{data_layer}_{plat_env}"
-            # Actually the pattern from examples: lh_cdp_sap_tcl_raw_prd
-            # Here source_name=cdp but actual source (sap_tcl) comes from context
-            # For simplicity when source_name=cdp, we use: lh_cdp_{layer}_{plat_env}
-            # But that's too short. Looking at examples more carefully:
-            # intake M0000449: source_name=cdp, db_name=lh_cdp_sap_tcl_raw_prd
-            # The "sap_tcl" part comes from the actual source system, not source_name
-            # This means source_name might be "cdp" as the pipeline, but there's
-            # another source identifier. For now, keep it simple:
-            db_name = f"lh_{source_name}_{data_layer}_{plat_env}"
-        else:
-            # Non-CDP: lh_{source_name}_{layer}_{plat_env}
-            db_name = f"lh_{source_name}_{data_layer}_{plat_env}"
-    elif data_construct == "DataProduct":
-        # Compute naming: {owning_entity}_{source_name}_{layer}_{plat_env}
-        entity_lower = enterprise.lower()
-        db_name = f"{entity_lower}_{source_name}_{data_layer}_{plat_env}"
-    else:
-        db_name = f"lh_{source_name}_{data_layer}_{plat_env}"
+    derived = parsed.get("derived_fields")
+    if not isinstance(derived, dict):
+        raise ValueError("LLM response missing derived_fields object")
 
-    derived["database_name"] = db_name
+    required_keys = ["database_name", "database_s3_location", "database_description", "aws_account_id", "region"]
+    missing_keys = [key for key in required_keys if not str(derived.get(key, "")).strip()]
+    if missing_keys:
+        raise ValueError(f"LLM derived_fields missing required keys: {missing_keys}")
 
-    # 4. database_s3_location — must match enterprise bucket and layer
-    entity_lower = enterprise.lower()
-    subgrp_segment = f"-{subgroup.lower()}" if subgroup else ""
-
-    if data_construct == "Source":
-        # Lakehouse bucket: {plat_env}-lh1-{entity}[-{subgrp}]-src
-        bucket = f"{plat_env}-lh1-{entity_lower}{subgrp_segment}-src"
-
-        if data_layer == "raw" and is_cdp:
-            # Raw + CDP: raw/cdp/{data_env}/src/{source_name}/
-            path_segment = f"raw/cdp/{data_env}/src/{source_name}/"
-        elif data_layer == "raw":
-            # Raw non-CDP: raw/current/{data_env}/src/{source_name}/
-            path_segment = f"raw/current/{data_env}/src/{source_name}/"
-        elif data_layer == "raw_serving":
-            # Raw serving: raw_serving/{data_env}/src/{source_name}/
-            path_segment = f"raw_serving/{data_env}/src/{source_name}/"
-        elif data_layer == "internal":
-            path_segment = f"internal/{data_env}/src/{source_name}/"
-        else:
-            path_segment = f"{data_layer}/{data_env}/src/{source_name}/"
-
-        derived["database_s3_location"] = f"s3://{bucket}/{path_segment}"
-
-    elif data_construct == "DataProduct":
-        # Compute bucket: {plat_env}-cmpN-{subgrp}-dp
-        # Extract compute number from abbreviation
-        cmp_num = acct_abbr.split("-")[1] if "-" in acct_abbr else "cmp1"
-        bucket = f"{plat_env}-{cmp_num}-{subgroup.lower() if subgroup else entity_lower}-dp"
-
-        if data_layer == "curated":
-            path_segment = f"curated/{data_env}/{entity_lower}/{source_name}/"
-        elif data_layer == "serving":
-            path_segment = f"serving/{data_env}/{entity_lower}/{source_name}/"
-        else:
-            path_segment = f"{data_layer}/{data_env}/{entity_lower}/{source_name}/"
-
-        derived["database_s3_location"] = f"s3://{bucket}/{path_segment}"
-
-    # 5. database_description
-    derived["database_description"] = f"Store data from {source_name} source system"
-
-    return derived
+    # Keep only configured derived fields so YAML generation and confirmation stay clean.
+    allowed_derived = {field.get("name") for field in config.get("derive_fields", []) if field.get("name")}
+    clean_derived = {key: value for key, value in derived.items() if key in allowed_derived}
+    metadata["derivation"] = parsed.get("derivation") or {}
+    return clean_derived, metadata
 
 
 async def derive_fields(resource_id: str, **kwargs) -> str:
@@ -354,7 +339,25 @@ async def derive_fields(resource_id: str, **kwargs) -> str:
                 "next_action": "Ask the user for the missing S3 naming inputs, store them with set_fields if they are configured collect fields, then re-run derive_fields.",
             }, default=str)
     elif resource.resource_type == "glue_db":
-        derived = _derive_glue_db_fields(resource.collected_fields)
+        try:
+            derived, derivation_metadata = await _derive_glue_db_fields_with_llm(resource.collected_fields)
+        except Exception as exc:
+            return json.dumps({
+                "error": "Glue DB LLM derivation failed",
+                "resource_id": resource.resource_id,
+                "detail": str(exc),
+                "next_action": "Ask the user for missing context if applicable, then re-run derivation. Reviewer will perform full governance validation later.",
+            }, default=str)
+
+        if derived is None:
+            missing_inputs = (derivation_metadata or {}).get("missing_inputs") or []
+            return json.dumps({
+                "error": "Cannot derive Glue DB fields — LLM identified missing naming inputs",
+                "resource_id": resource.resource_id,
+                "missing_inputs": missing_inputs,
+                "derivation_metadata": derivation_metadata,
+                "next_action": "Ask the user for the missing Glue DB naming inputs, store them with set_fields if they are configured collect fields, then re-run derive_fields.",
+            }, default=str)
     else:
         derived = {}
 
