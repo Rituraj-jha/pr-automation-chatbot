@@ -1,0 +1,313 @@
+# ─── ENT/FUNC Delegate Knowledge Base ────────────────────────────────────────
+# Source: Enterprise / Functional Group Delegates Matrix
+#
+# Fields:
+#   code                    : canonical ENT/FUNC identifier (e.g. AGTR_EMEA)
+#   label                   : human-readable group name
+#   data_leader             : Data & Analytics Leader / Data Owner
+#   fte_delegate_data_access: FTE Delegate (Data Access) — cross-functional only
+#   fte_db_owner_raw        : FTE Database Owner — Raw (new DB creation only)
+#   fte_db_owner_curated    : FTE Database Owner — Curated & Serving (new DB creation only)
+#
+# All name fields are case-normalized to "Firstname Lastname" for fuzzy matching.
+# Empty string means the role is currently unassigned.
+# ─────────────────────────────────────────────────────────────────────────────
+
+entries:
+
+  # ── Ag & Trading ─────────────────────────────────────────────────────────────
+  - code: AGTR_EMEA
+    label: "Ag & Trading / EMEA"
+    data_leader: "Jonathan Cook"
+    fte_delegate_data_access: "Sandra Trevino"
+    fte_db_owner_raw: "Sandra Trevino"
+    fte_db_owner_curated: "Sandra Trevino"
+
+  - code: AGTR_NA
+    label: "Ag & Trading / NA"
+    data_leader: "Jonathan Cook"
+    fte_delegate_data_access: "Chris Peterson"
+    fte_db_owner_raw: "Chris Peterson"
+    fte_db_owner_curated: "Chris Peterson"
+
+  - code: AGTR_LATAM
+    label: "Ag & Trading / LATAM"
+    data_leader: "Jonathan Cook"
+    fte_delegate_data_access: "Alysson Rocha"
+    fte_db_owner_raw: "Alysson Rocha"
+    fte_db_owner_curated: "Alysson Rocha"
+
+  - code: AGTR_APAC
+    label: "Ag & Trading / APAC"
+    data_leader: "Jonathan Cook"
+    fte_delegate_data_access: "C Y (Yan Cheng)"
+    fte_db_owner_raw: "C Y (Yan Cheng)"
+    fte_db_owner_curated: "C Y (Yan Cheng)"
+    name_aliases:
+      - "Yan Cheng"
+      - "C Y Yan Cheng"
+
+  - code: AGTR_WTG
+    label: "Ag & Trading / World Trading Group (WTG)"
+    data_leader: "Jonathan Cook"
+    fte_delegate_data_access: "Ajay Rajendran"
+    fte_db_owner_raw: "Ajay Rajendran"
+    fte_db_owner_curated: "Ajay Rajendran"
+
+  - code: AGTR_WTG_CDAS
+    label: "Ag & Trading / World Trading Group (WTG) - Cargill Data Asset Solution (CDAS)"
+    data_leader: "Jonathan Cook"
+    fte_delegate_data_access: "Ajay Rajendran"
+    fte_db_owner_raw: "Ajay Rajendran"
+    fte_db_owner_curated: "Ajay Rajendran"
+
+  - code: AGTR_OT
+    label: "Ag & Trading / Ocean Transportation"
+    data_leader: "Tatiana Simonato"
+    fte_delegate_data_access: "Mohammed Alaeikhanehshir"
+    fte_db_owner_raw: "Mohammed Alaeikhanehshir"
+    fte_db_owner_curated: "Mohammed Alaeikhanehshir"
+
+  - code: AGTR_CRM
+    label: "Ag & Trading / CRM (Cargill Risk Management)"
+    data_leader: "Tatiana Simonato"
+    fte_delegate_data_access: "Tatiana Simonato"
+    fte_db_owner_raw: "Tatiana Simonato"
+    fte_db_owner_curated: "Andrew Stephens"
+
+  - code: AGTR_TCM
+    label: "Ag & Trading / Trade & Capital Markets (TCM)"
+    data_leader: "Tatiana Simonato"
+    fte_delegate_data_access: "Atila Branco"
+    fte_db_owner_raw: "Atila Branco"
+    fte_db_owner_curated: "Atila Branco"
+
+  - code: AGTR_MET
+    label: "Ag & Trading / Metals"
+    data_leader: "Tatiana Simonato"
+    fte_delegate_data_access: ""
+    fte_db_owner_raw: ""
+    fte_db_owner_curated: ""
+
+  - code: AGTR_SUST
+    label: "Ag & Trading / Sustainability"
+    data_leader: "Jonathan Cook"
+    fte_delegate_data_access: "Tarun Gopalan"
+    fte_db_owner_raw: "Tarun Gopalan"
+    fte_db_owner_curated: "Tarun Gopalan"
+
+  - code: AGTR_MBETH
+    label: "Ag & Trading / Macbeth"
+    data_leader: "Jonathan Cook"
+    fte_delegate_data_access: "Mark Hudson"
+    fte_db_owner_raw: "Mark Hudson"
+    fte_db_owner_curated: "Mark Hudson"
+
+  # ── Corporate ─────────────────────────────────────────────────────────────────
+  - code: CORP_GI_SUST
+    label: "Corporate / Global Impact - Sustainability"
+    data_leader: "Matt Wood"
+    fte_delegate_data_access: "Brittany Baum"
+    fte_db_owner_raw: "Kayode Dosunmu"
+    fte_db_owner_curated: "Brittany Baum"
+
+  - code: CORP_EHS
+    label: "Corporate / Environment, Health & Safety (EHS)"
+    data_leader: "Shushank Punj"
+    fte_delegate_data_access: "Vishal Jaiswal & Tanyawan Kaipech"
+    fte_db_owner_raw: "Kayode Dosunmu"
+    fte_db_owner_curated: "Vishal Jaiswal & Tanyawan Kaipech"
+    name_aliases:
+      - "Vishal Jaiswal"
+      - "Tanyawan Kaipech"
+
+  - code: CORP_FIN
+    label: "Corporate / Finance"
+    data_leader: "Martijn Ruijenbeek"
+    fte_delegate_data_access: "Chris Coward"
+    fte_db_owner_raw: "Kayode Dosunmu"
+    fte_db_owner_curated: "Chris Coward"
+
+  - code: CORP_GTC
+    label: "Corporate / Global Trade Compliance"
+    data_leader: "Aldo Quintanilla"
+    fte_delegate_data_access: "Jose Fischer"
+    fte_db_owner_raw: "Kayode Dosunmu"
+    fte_db_owner_curated: ""
+
+  - code: CORP_CPT
+    label: "Corporate / Procurement & Transportation"
+    data_leader: "Max Voots"
+    fte_delegate_data_access: "Evgeny Belov and Celso Gabas"
+    fte_db_owner_raw: "Kayode Dosunmu"
+    fte_db_owner_curated: "Evgeny Belov and Celso Gabas"
+    name_aliases:
+      - "Evgeny Belov"
+      - "Celso Gabas"
+
+  - code: CORP_HR
+    label: "Corporate / Human Resources"
+    data_leader: "Dan Trares"
+    fte_delegate_data_access: "Imran Mohammed"
+    fte_db_owner_raw: "Kayode Dosunmu"
+    fte_db_owner_curated: ""
+    name_aliases:
+      - "Addison Hodge"
+
+  - code: CORP_AUDIT
+    label: "Corporate / Audit"
+    data_leader: "Rahul Anand"
+    fte_delegate_data_access: ""
+    fte_db_owner_raw: "Kayode Dosunmu"
+    fte_db_owner_curated: ""
+
+  - code: CORP_DTD
+    label: "Corporate / Digital Technology & Data"
+    data_leader: ""
+    fte_delegate_data_access: ""
+    fte_db_owner_raw: "Kayode Dosunmu"
+    fte_db_owner_curated: ""
+
+  - code: CORP_LAW
+    label: "Corporate / Law"
+    data_leader: "Rachael Windsperger"
+    fte_delegate_data_access: "Gustavo Santos"
+    fte_db_owner_raw: "Kayode Dosunmu"
+    fte_db_owner_curated: ""
+
+  - code: CORP_DTD_DPE
+    label: "Corporate / Digital Technology & Data - Data Platforms & Engineering"
+    data_leader: "Peter Alfors"
+    fte_delegate_data_access: "Kirsten Walter"
+    fte_db_owner_raw: "Sri Menon"
+    fte_db_owner_curated: ""
+
+  - code: CORP_RMG
+    label: "Corporate / Risk Management Group"
+    data_leader: ""
+    fte_delegate_data_access: ""
+    fte_db_owner_raw: "Kayode Dosunmu"
+    fte_db_owner_curated: ""
+
+  # ── Food ──────────────────────────────────────────────────────────────────────
+  - code: FOOD_FSQR
+    label: "Food / Food Safety, Quality & Regulatory"
+    data_leader: "Suzy Sawyer"
+    fte_delegate_data_access: "Parag Sikka"
+    fte_db_owner_raw: "Phani Kumar"
+    fte_db_owner_curated: "Parag Sikka"
+
+  - code: FOOD_FSGL
+    label: "Food / Food Solutions - All Regions - Global"
+    data_leader: "Hitesh Mangtani"
+    fte_delegate_data_access: "Kimera Appanna"
+    fte_db_owner_raw: "Phani Kumar"
+    fte_db_owner_curated: "Hitesh Mangtani"
+
+  - code: FOOD_FS_NA
+    label: "Food / Food Solutions - NA"
+    data_leader: "Allen Yang"
+    fte_delegate_data_access: "Kyle Britt"
+    fte_db_owner_raw: "Phani Kumar"
+    fte_db_owner_curated: "Kyle Britt"
+
+  - code: FOOD_FS_LATAM
+    label: "Food / Food Solutions - LATAM"
+    data_leader: "Amanda Silva"
+    fte_delegate_data_access: "Amanda Silva"
+    fte_db_owner_raw: "Phani Kumar"
+    fte_db_owner_curated: "Amanda Silva"
+
+  - code: FOOD_FS_APAC
+    label: "Food / Food Solutions - APAC"
+    data_leader: "Wouter van Groenestijn"
+    fte_delegate_data_access: "Kimera Appanna"
+    fte_db_owner_raw: "Phani Kumar"
+    fte_db_owner_curated: "Kimera Appanna"
+
+  - code: FOOD_FS_EMEA
+    label: "Food / Food Solutions - EMEA"
+    data_leader: "Hitesh Mangtani"
+    fte_delegate_data_access: "Kimera Appanna"
+    fte_db_owner_raw: "Phani Kumar"
+    fte_db_owner_curated: "Kimera Appanna"
+
+  - code: FOOD_PRGL
+    label: "Food / Protein - All Regions - Global"
+    data_leader: "Katie Porter"
+    fte_delegate_data_access: "Kyle Britt"
+    fte_db_owner_raw: "Asdrubal Alpizar"
+    fte_db_owner_curated: "Kyle Britt"
+
+  - code: FOOD_PR_LATAM
+    label: "Food / Protein - LATAM"
+    data_leader: "Amanda Silva"
+    fte_delegate_data_access: "Amanda Silva"
+    fte_db_owner_raw: "Asdrubal Alpizar"
+    fte_db_owner_curated: "Amanda Silva"
+
+  - code: FOOD_PR_NA
+    label: "Food / Protein - NA"
+    data_leader: "Katie Porter"
+    fte_delegate_data_access: "Kyle Britt"
+    fte_db_owner_raw: "Asdrubal Alpizar"
+    fte_db_owner_curated: "Kyle Britt"
+
+  - code: FOOD_PR_APAC
+    label: "Food / Protein - APAC"
+    data_leader: "Wouter van Groenestijn"
+    fte_delegate_data_access: "Kimera Appanna"
+    fte_db_owner_raw: "Asdrubal Alpizar"
+    fte_db_owner_curated: "Kimera Appanna"
+
+  - code: FOOD_SALT
+    label: "Food / Salt"
+    data_leader: "Katie Porter"
+    fte_delegate_data_access: "Kyle Britt"
+    fte_db_owner_raw: "Asdrubal Alpizar"
+    fte_db_owner_curated: "Kyle Britt"
+
+  - code: FOOD_CE
+    label: "Food / Commercial Excellence"
+    data_leader: "Katie Porter"
+    fte_delegate_data_access: "Kyle Britt"
+    fte_db_owner_raw: "Asdrubal Alpizar"
+    fte_db_owner_curated: "Kyle Britt"
+
+  - code: FOOD_RD
+    label: "Food / R&D (Research & Development)"
+    data_leader: ""
+    fte_delegate_data_access: ""
+    fte_db_owner_raw: "Gloriana Zumbado"
+    fte_db_owner_curated: ""
+
+  # ── Specialized Portfolio ─────────────────────────────────────────────────────
+  - code: SPEC_ANH
+    label: "Specialized Portfolio / Animal Nutrition"
+    data_leader: "Justin Willhoite"
+    fte_delegate_data_access: "Shawn Yeager"
+    fte_db_owner_raw: "Felipe Alves da Silva & Daniel Tiberio"
+    fte_db_owner_curated: "Felipe Alves da Silva & Daniel Tiberio"
+    name_aliases:
+      - "Felipe Alves da Silva"
+      - "Daniel Tiberio"
+
+  - code: SPEC_CBI
+    label: "Specialized Portfolio / Bioindustrial (CBI)"
+    data_leader: "Jack Vishneski"
+    fte_delegate_data_access: "Jack Vishneski"
+    fte_db_owner_raw: "Felipe Alves da Silva & Daniel Tiberio"
+    fte_db_owner_curated: "Felipe Alves da Silva & Daniel Tiberio"
+    name_aliases:
+      - "Felipe Alves da Silva"
+      - "Daniel Tiberio"
+
+  - code: SPEC_DS
+    label: "Specialized Portfolio / Deicing Solution"
+    data_leader: "Jack Vishneski"
+    fte_delegate_data_access: "John Thompson"
+    fte_db_owner_raw: "Felipe Alves da Silva & Daniel Tiberio"
+    fte_db_owner_curated: "Felipe Alves da Silva & Daniel Tiberio"
+    name_aliases:
+      - "Felipe Alves da Silva"
+      - "Daniel Tiberio"

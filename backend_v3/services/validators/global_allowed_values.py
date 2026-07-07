@@ -75,6 +75,7 @@ def apply_allowed_values_rule(file_path: str, payload: Dict, rule_id: str, rule:
     params = rule.get("params", {})
     severity = rule.get("severity", "ERROR")
     recommendation = rule.get("recommendation")
+    effective_allow_missing = False
 
     def _normalize_param_key(value: str) -> str:
         return re.sub(r"[^a-z0-9]", "", str(value).lower())
@@ -126,6 +127,9 @@ def apply_allowed_values_rule(file_path: str, payload: Dict, rule_id: str, rule:
     elif isinstance(params, str):
         effective_regex = params
     elif isinstance(params, dict):
+        direct_allow_missing = _get_param_value(params, "allow_missing")
+        if isinstance(direct_allow_missing, bool):
+            effective_allow_missing = direct_allow_missing
         direct_allowed_values = _get_param_value(params, "allowed_values")
         if direct_allowed_values is not None:
             if isinstance(direct_allowed_values, list):
@@ -141,6 +145,8 @@ def apply_allowed_values_rule(file_path: str, payload: Dict, rule_id: str, rule:
                     continue
                 if normalize_resource_key(context_key) != normalized_resource:
                     continue
+                if isinstance(context_data.get("allow_missing"), bool):
+                    effective_allow_missing = context_data.get("allow_missing")
                 if "allowed_values" in context_data:
                     if isinstance(context_data["allowed_values"], list):
                         effective_allowed_values = context_data["allowed_values"]
@@ -157,6 +163,12 @@ def apply_allowed_values_rule(file_path: str, payload: Dict, rule_id: str, rule:
                             recommendation="Check the rulepack configuration")
     value = get_nested_value(payload, target_field)
     if value is None:
+        if effective_allow_missing:
+            return build_result(rule_id=rule_id, rule_name=rule.get("name"), status="SKIPPED",
+                                severity="INFO", file_path=file_path,
+                                message=f"Optional field '{target_field}' is missing; skipping allowed-values check",
+                                recommendation="",
+                                evidence={"target_field": target_field, "status": "optional_missing"})
         rec = recommendation or f"Provide a value for '{target_field}'"
         rec = _format_text(rec, allowed_values=effective_allowed_values, regex=effective_regex,
                            field_name=target_field)

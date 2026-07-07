@@ -2,11 +2,11 @@
 # Central config for validations that must pass before certain resources can be created.
 
 # Data Owner Approval validation.
-# For now this is mocked in tools/intake_tools.py, but this config is the source of truth
-# for which resources require approval and what file types the frontend should accept.
+# Enhanced reviewer uses OpenAI vision + knowledge base validation.
+# Enable/disable enhanced reviewer in settings.yaml (approval_reviewer.enhanced_reviewer_enabled).
 data_owner_approval:
   enabled: true
-  mock: true
+  mock: false
   validator_tool: validate_data_owner_approval_document
   resources:
     - glue_db
@@ -15,4 +15,4 @@ data_owner_approval:
     - image/jpeg
     - image/jpg
     - application/pdf
-  description: "Upload a data owner approval screenshot or PDF. PDFs will be converted to images before real image analysis is added."
+  description: "Upload a data owner approval screenshot or PDF. The system will extract and validate: approver name, approval date, source system, and business justification."

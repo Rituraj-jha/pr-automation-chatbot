@@ -1,0 +1,385 @@
+# ─── Source System Delegate Knowledge Base ───────────────────────────────────
+# Source: Source System Data Owner / Delegate Matrix
+#
+# Fields:
+#   source_system : canonical source system name (preserves original casing)
+#   data_owner    : Source System Data Owner (empty string = unassigned)
+#   delegate      : Source System Data Owner Delegate (semicolon-separated when multiple)
+#   delegate_list : parsed list for deterministic matching (auto-generated in loader)
+#
+# Empty string means the role is currently unassigned.
+# ─────────────────────────────────────────────────────────────────────────────
+
+entries:
+
+  - source_system: "1000 Ciftci 1000 Bereket"
+    data_owner: "Matt Wood"
+    delegate: "Brittany Baum"
+
+  - source_system: "1C 8"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "1C Accounting Kakhova"
+    data_owner: "Jonathan Cook"
+    delegate: "Sandra Trevino"
+
+  - source_system: "1C CPN"
+    data_owner: "Justin Willhoite"
+    delegate: "Shawn Yeager"
+
+  - source_system: "1C CPT USD"
+    data_owner: "Jonathan Cook"
+    delegate: "Sandra Trevino"
+
+  - source_system: "1C Document Management"
+    data_owner: "Jonathan Cook"
+    delegate: "Sandra Trevino"
+
+  - source_system: "1C Grain Ukraine"
+    data_owner: "Jonathan Cook"
+    delegate: "Sandra Trevino"
+
+  - source_system: "1C Laboratory"
+    data_owner: "Jonathan Cook"
+    delegate: "Sandra Trevino"
+
+  - source_system: "1C Original Track"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "1C Personal Data"
+    data_owner: "Dan Trares"
+    delegate: "Addison Hodge; Imran Mohammed"
+
+  - source_system: "1C Printing Solution"
+    data_owner: "Jonathan Cook"
+    delegate: "Sandra Trevino"
+
+  - source_system: "1C Trading Book"
+    data_owner: "Jonathan Cook"
+    delegate: "Sandra Trevino"
+
+  - source_system: "1C Working Hours"
+    data_owner: "Dan Trares"
+    delegate: "Addison Hodge; Imran Mohammed"
+
+  - source_system: "204 Reporting"
+    data_owner: "Jonathan Cook"
+    delegate: ""
+
+  - source_system: "2z Barramento"
+    data_owner: "Jonathan Cook"
+    delegate: "Atila Branco"
+
+  - source_system: "3500 Machinery Monitoring System"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "4Human HRM"
+    data_owner: "Dan Trares"
+    delegate: "Addison Hodge; Imran Mohammed"
+
+  - source_system: "6ProTecSys 2 Suite"
+    data_owner: "Hitesh Mangtani"
+    delegate: "Kimera Appanna"
+
+  - source_system: "800xA Proces Control"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "A10 Thunder"
+    data_owner: "Abhinav Shankar"
+    delegate: "Abhinav Shankar"
+
+  - source_system: "Abacus - Portfolio calculator"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "ABB Sattline"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "ABBEMATPC"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "Abbott StarLims"
+    data_owner: "Ken Finley"
+    delegate: "Ken Finley"
+
+  - source_system: "Abbyy FlexiCapture"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "Abbyy Vantage"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "ABC Survey"
+    data_owner: "Martijn Ruijenbeek"
+    delegate: "Chris Coward"
+
+  - source_system: "ABS"
+    data_owner: "Dan Trares"
+    delegate: "Addison Hodge; Imran Mohammed"
+
+  - source_system: "AcceleratorKMS"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "Access Control_1_SU - Plant IT - EMEA"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "Accuity"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "AC-Hunter"
+    data_owner: "Abhinav Shankar"
+    delegate: "Abhinav Shankar"
+
+  - source_system: "ACT"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "Actemium L And S"
+    data_owner: "Justin Willhoite"
+    delegate: "Shawn Yeager"
+
+  - source_system: "Actemium LES"
+    data_owner: "Justin Willhoite"
+    delegate: "Shawn Yeager"
+
+  - source_system: "Actemium MES"
+    data_owner: "Justin Willhoite"
+    delegate: "Shawn Yeager"
+
+  - source_system: "Adaptiva"
+    data_owner: "Abhinav Shankar"
+    delegate: "Abhinav Shankar"
+
+  - source_system: "Adaptris"
+    data_owner: "Jonathan Cook"
+    delegate: "Yan Cheng"
+
+  - source_system: "Address Book"
+    data_owner: "Martijn Ruijenbeek"
+    delegate: "Chris Coward"
+
+  - source_system: "ADE Portal"
+    data_owner: "Jonathan Cook"
+    delegate: "Alysson Rocha"
+
+  - source_system: "Admin Rights Management Tool"
+    data_owner: "Abhinav Shankar"
+    delegate: "Abhinav Shankar"
+
+  - source_system: "Adobe Analytics"
+    data_owner: "Matt Wood"
+    delegate: "Brittany Baum"
+
+  - source_system: "Adobe ETLA Console"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "Adonis"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "ADP - GlobalView"
+    data_owner: "Dan Trares"
+    delegate: "Addison Hodge; Imran Mohammed"
+
+  - source_system: "ADP Expert"
+    data_owner: "Dan Trares"
+    delegate: "Addison Hodge; Imran Mohammed"
+
+  - source_system: "ADP STREAMLINE"
+    data_owner: "Dan Trares"
+    delegate: "Addison Hodge; Imran Mohammed"
+
+  - source_system: "ADP Streamline - Japan"
+    data_owner: "Dan Trares"
+    delegate: "Addison Hodge; Imran Mohammed"
+
+  - source_system: "ADP Streamline - Taiwan"
+    data_owner: "Dan Trares"
+    delegate: "Addison Hodge; Imran Mohammed"
+
+  - source_system: "Advanced Contextualization Tool ACT"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "Advice KN1"
+    data_owner: "Jonathan Cook"
+    delegate: "Atila Branco"
+
+  - source_system: "Adyen"
+    data_owner: "Martijn Ruijenbeek"
+    delegate: "Chris Coward"
+
+  - source_system: "Adyen Payment Link Generator"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "AEMES"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "A-Force - Descartes GLN"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "A-force - Forex"
+    data_owner: "Kimera Appanna"
+    delegate: ""
+
+  - source_system: "A-Force - JDE EnterpriseOne- EMEA"
+    data_owner: "Max Voots"
+    delegate: "Max Voots"
+
+  - source_system: "a-force - jde enterpriseone- Russia"
+    data_owner: "Kimera Appanna"
+    delegate: ""
+
+  - source_system: "A-Force - Qsoft"
+    data_owner: "Kimera Appanna"
+    delegate: ""
+
+  - source_system: "A-Force - VMI - EMEA"
+    data_owner: "Hitesh Mangtani"
+    delegate: "Kimera Appanna"
+
+  - source_system: "Aforce JDE OW to eBIS ODS interface"
+    data_owner: "Kimera Appanna"
+    delegate: ""
+
+  - source_system: "A-Force MyUnidoc EMEA"
+    data_owner: "Kimera Appanna"
+    delegate: ""
+
+  - source_system: "Aforce standard Crystal Reports and BOBJ Webi Universes and Operational Data Reporting"
+    data_owner: "Kimera Appanna"
+    delegate: ""
+
+  - source_system: "AFS - Trade Promotion Management"
+    data_owner: "Allen Yang"
+    delegate: "Kyle Britt"
+
+  - source_system: "Ag Transport Coalition Grain Supply Chain System"
+    data_owner: "Jonathan Cook"
+    delegate: "Chris Peterson"
+
+  - source_system: "Agile Ops"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "Agilent Chem Station"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "Agilent OpenLAB CDS"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "AgResource website"
+    data_owner: "Jonathan Cook"
+    delegate: "Chris Peterson"
+
+  - source_system: "Agrichain"
+    data_owner: "Jonathan Cook"
+    delegate: "Yan Cheng"
+
+  - source_system: "Agricola Farmers"
+    data_owner: "Jonathan Cook"
+    delegate: "Sandra Trevino"
+
+  - source_system: "Agrimesh"
+    data_owner: "Allen Yang"
+    delegate: "Kyle Britt"
+
+  - source_system: "Agriness"
+    data_owner: "Justin Willhoite"
+    delegate: "Shawn Yeager"
+
+  - source_system: "Agris - Owensboro Grain"
+    data_owner: "Jonathan Cook"
+    delegate: ""
+
+  - source_system: "Agro 3000 Flex"
+    data_owner: "Justin Willhoite"
+    delegate: "Shawn Yeager"
+
+  - source_system: "Agrosoft"
+    data_owner: "Jonathan Cook"
+    delegate: "Chris Peterson"
+
+  - source_system: "Agrotis"
+    data_owner: "Amanda Silva"
+    delegate: "Amanda Silva"
+
+  - source_system: "Agrotools"
+    data_owner: "Jonathan Cook"
+    delegate: "Alysson Rocha"
+
+  - source_system: "AI Piper"
+    data_owner: ""
+    delegate: ""
+
+  - source_system: "AI-Assisted Label Accuracy PoC"
+    data_owner: "Abhinav Shankar"
+    delegate: "Abhinav Shankar"
+
+  - source_system: "AIDT"
+    data_owner: "Dan Trares"
+    delegate: "Addison Hodge; Imran Mohammed"
+
+  - source_system: "AIMMS"
+    data_owner: "Ken Finley"
+    delegate: "Ken Finley"
+
+  - source_system: "Airmaster"
+    data_owner: "Jonathan Cook"
+    delegate: "Alysson Rocha"
+
+  - source_system: "Anaplan"
+    data_owner: "Martijn Ruijenbeek"
+    delegate: "Chris Coward"
+
+  - source_system: "Amazon Web Services (AWS)"
+    data_owner: "Abhinav Shankar"
+    delegate: "Abhinav Shankar"
+
+  - source_system: "Azure"
+    data_owner: "Abhinav Shankar"
+    delegate: "Abhinav Shankar"
+
+  - source_system: "Azure DevOps formerly Microsoft Visual Studio Team Services VSTS"
+    data_owner: "Abhinav Shankar"
+    delegate: "Abhinav Shankar"
+
+  - source_system: "Azure Document Intelligence"
+    data_owner: "Martijn Ruijenbeek"
+    delegate: "Chris Coward"
+
+  - source_system: "Atlan Data Catalog"
+    data_owner: "Tim Derrico"
+    delegate: "Kirsten Walter"
+
+  - source_system: "Cargill Data Platform"
+    data_owner: "Tim Derrico"
+    delegate: "Peter Alfors"
+
+  - source_system: "Cargill Data Platform-Finance"
+    data_owner: "Martijn Ruijenbeek"
+    delegate: "Chris Coward"
+
+  - source_system: "ChatGPT Enterprise"
+    data_owner: "Abhinav Shankar"
+    delegate: "Abhinav Shankar"
+
+  - source_system: "Cisco Contact Center"
+    data_owner: "Abhinav Shankar"
+    delegate: "Abhinav Shankar"

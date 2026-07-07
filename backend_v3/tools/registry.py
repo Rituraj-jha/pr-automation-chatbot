@@ -441,7 +441,7 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "validate_data_owner_approval_document",
-            "description": "Mock-validate uploaded data owner approval evidence for resources that require it. Accepts frontend-provided PDF/image metadata or content. Call this when create_resources returns blocked_by_pre_validation with required_tool validate_data_owner_approval_document.",
+            "description": "Validate uploaded data owner approval evidence for resources that require it. Uses OpenAI vision extraction + knowledge base validation when enhanced reviewer is enabled in settings. Accepts frontend-provided PDF/image metadata or content. Call this when create_resources returns blocked_by_pre_validation with required_tool validate_data_owner_approval_document. Returns structured review summary with itemized checks, confidence scores, and pass/fail status.",
             "parameters": {
                 "type": "object",
                 "properties": {

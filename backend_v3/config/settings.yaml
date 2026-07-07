@@ -29,3 +29,13 @@ intake_validation:
   format_regex: "^[MI]\\d+$"
   external_api: null  # future: URL to intake tracking system for status lookup
   allow_proceed_on_not_found: true
+
+# Approval Reviewer settings
+approval_reviewer:
+  # Enhanced reviewer uses OpenAI vision + KB validation vs mock pass-through
+  enhanced_reviewer_enabled: true
+  # Confidence threshold for auto-approval (0.0 - 1.0)
+  confidence_threshold: 0.7
+  # Knowledge base files (relative to config/)
+  ent_func_kb: knowledge_base/ent_func_delegates.yaml
+  source_system_kb: knowledge_base/source_system_delegates.yaml

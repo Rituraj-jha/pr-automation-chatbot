@@ -1,10 +1,14 @@
-"""Pre-validation tools (MOCK).
+"""Pre-validation tools.
 
 Contains:
   - check_intake_id: validates intake ID against approved list (Power BI mock)
-  - validate_approval_image: validates data owner approval screenshot (always passes)
+  - validate_data_owner_approval_document: validates approval evidence (enhanced + mock)
+  - validate_approval_image: legacy alias for approval validation
 
-TODO: Replace with real API calls.
+Enhanced reviewer (when enabled):
+  - Uses OpenAI vision to extract approval evidence from images/PDFs
+  - Validates approver, date, source system, business purpose against KB
+  - Returns structured review summary with confidence scores and itemized checks
 """
 from __future__ import annotations
 
@@ -151,11 +155,13 @@ async def validate_data_owner_approval_document(
     intake_id: str | None = None,
     **kwargs,
 ) -> str:
-    """Validate data owner approval document evidence (MOCK — always passes).
+    """Validate data owner approval document evidence.
 
-    This is the frontend-friendly approval validator. It accepts uploaded-file
-    metadata/content pointers now, and can later be replaced with real PDF page
-    extraction + image analysis without changing the conversation flow.
+    This validates approval evidence using OpenAI vision extraction + knowledge base
+    matching when enhanced_reviewer is enabled. Falls back to mock behavior otherwise.
+    
+    The tool accepts uploaded-file metadata from the frontend and returns a structured
+    validation result with itemized checks, confidence scores, and final decision.
     """
     requirements = data_owner_approval_requirements()
     uploaded_file = _load_uploaded_approval_file(file_id)
@@ -186,6 +192,197 @@ async def validate_data_owner_approval_document(
         intake_id = intake_id or uploaded_file.get("intake_id")
         resource_ids = resource_ids or uploaded_file.get("resource_ids") or None
 
+    # ─── Enhanced Reviewer Path ──────────────────────────────────────────────
+    # Check if professional reviewer is enabled in settings
+    settings_path = _CONFIG_DIR / "settings.yaml"
+    enhanced_enabled = False
+    if settings_path.exists():
+        try:
+            settings_data = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+            approval_settings = settings_data.get("approval_reviewer", {})
+            enhanced_enabled = approval_settings.get("enhanced_reviewer_enabled", False)
+        except Exception:
+            pass
+
+    if enhanced_enabled and uploaded_file and uploaded_file.get("file_exists"):
+        try:
+            from services.approval_reviewer import review_approval_document
+            from db.repository import load_session_fields
+
+            session = None
+            session_fields = {}
+            try:
+                from tools.session_tools import _get_session
+                session = _get_session()
+                session_fields = await load_session_fields(session.session_id)
+            except RuntimeError:
+                pass  # Tool called outside of chat session (tests)
+
+            file_path = _APPROVAL_UPLOAD_DIR / uploaded_file["stored_file"]
+            review_summary = await review_approval_document(
+                file_path=file_path,
+                file_id=file_id,
+                file_name=file_name,
+                file_type=file_type,
+                resource_ids=resource_ids,
+                intake_id=intake_id,
+                session_fields=session_fields,
+            )
+
+            # Convert ReviewSummary to tool response format
+            if review_summary.final_decision == "approved":
+                requested_resources = [str(r).strip().lower() for r in resource_types if str(r).strip()]
+                approved_for = sorted(set(requested_resources))
+                ev = review_summary.extracted_evidence
+                check_lines = [f"- {c.check_name}: {c.status}" for c in review_summary.checks]
+                summary_text = "\n".join([
+                    "Approval review summary:",
+                    f"- approver: {ev.approver or 'not found'}",
+                    f"- approval_date: {ev.approval_date or 'not found'}",
+                    f"- source_system: {ev.source_system or 'not found'}",
+                    f"- business_purpose: {(ev.business_purpose[:120] + '...') if ev.business_purpose and len(ev.business_purpose) > 120 else (ev.business_purpose or 'not found')}",
+                    f"- extraction_method: {ev.extraction_method}",
+                    f"- overall_confidence: {review_summary.overall_confidence:.2%}",
+                    "Check results:",
+                    *check_lines,
+                ])
+
+                # Mark approval satisfied for matched resources
+                try:
+                    from tools.session_tools import _approval_key, _pending_approval_key, _all_required_present, _load_resource_config
+                    from tools.derive_tools import derive_fields
+                    from db.repository import save_session_field
+
+                    if session:
+                        approved_resource_ids = {r["resource_id"] for r in review_summary.approved_resources}
+                        auto_derived = []
+
+                        for approved in review_summary.approved_resources:
+                            resource_id = approved["resource_id"]
+                            await save_session_field(
+                                session.session_id,
+                                _approval_key(str(resource_id), "data_owner_approval"),
+                                "true",
+                            )
+                            
+                            # Auto-derive if ready
+                            resource = session.get_resource(str(resource_id)) if resource_id else None
+                            if resource:
+                                config = _load_resource_config(resource.resource_type)
+                                if (resource.status.value == "collecting" and config 
+                                    and _all_required_present(resource, config)):
+                                    derive_result = await derive_fields(resource_id=resource.resource_id)
+                                    try:
+                                        auto_derived.append(json.loads(derive_result))
+                                    except json.JSONDecodeError:
+                                        auto_derived.append({"resource_id": resource.resource_id, "result": derive_result})
+
+                        # Update pending approval state
+                        pending_raw = session_fields.get(_pending_approval_key("data_owner_approval"))
+                        if pending_raw:
+                            try:
+                                pending = json.loads(pending_raw)
+                                remaining_blocked = [
+                                    item for item in pending.get("blocked", [])
+                                    if str(item.get("resource_id")) not in approved_resource_ids
+                                ]
+                                if remaining_blocked:
+                                    pending["blocked"] = remaining_blocked
+                                    pending["resource_types"] = sorted({
+                                        str(item.get("resource_type", "")).strip().lower()
+                                        for item in remaining_blocked if item.get("resource_type")
+                                    })
+                                    pending["resource_ids"] = [item.get("resource_id") for item in remaining_blocked if item.get("resource_id")]
+                                    pending["pending_targets"] = [
+                                        {"resource_id": item.get("resource_id"), "resource_type": item.get("resource_type"), "intake_id": item.get("intake_id")}
+                                        for item in remaining_blocked
+                                    ]
+                                    await save_session_field(session.session_id, _pending_approval_key("data_owner_approval"), json.dumps(pending))
+                                else:
+                                    await save_session_field(session.session_id, _pending_approval_key("data_owner_approval"), "")
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+
+                        return json.dumps({
+                            "valid": True,
+                            "mock": False,
+                            "enhanced_reviewer": True,
+                            "approved_for": approved_for,
+                            "approved_resources": review_summary.approved_resources,
+                            "auto_derived": auto_derived,
+                            "review_summary": review_summary.to_dict(),
+                            "message": f"Approval validated successfully with {len(review_summary.checks)} checks.\n\n{summary_text}",
+                        })
+                except RuntimeError:
+                    pass  # Session not bound
+
+                # Return success even without session
+                return json.dumps({
+                    "valid": True,
+                    "mock": False,
+                    "enhanced_reviewer": True,
+                    "approved_for": approved_for,
+                    "approved_resources": review_summary.approved_resources,
+                    "review_summary": review_summary.to_dict(),
+                    "message": f"Approval validated successfully. {len(review_summary.checks)} checks passed.\n\n{summary_text}",
+                })
+
+            else:
+                # Rejected or needs manual review
+                extracted_summary = []
+                ev = review_summary.extracted_evidence
+                if ev.approver:
+                    extracted_summary.append(f"✓ Approver: {ev.approver} (confidence: {ev.approver_confidence:.0%})")
+                else:
+                    extracted_summary.append("✗ Approver: not found")
+                
+                if ev.approval_date:
+                    extracted_summary.append(f"✓ Date: {ev.approval_date} (confidence: {ev.approval_date_confidence:.0%})")
+                else:
+                    extracted_summary.append("✗ Date: not found")
+                
+                if ev.source_system:
+                    extracted_summary.append(f"✓ Source: {ev.source_system} (confidence: {ev.source_system_confidence:.0%})")
+                else:
+                    extracted_summary.append("✗ Source: not found")
+                
+                if ev.business_purpose:
+                    purpose_short = ev.business_purpose[:80] + "..." if len(ev.business_purpose) > 80 else ev.business_purpose
+                    extracted_summary.append(f"✓ Purpose: {purpose_short} (confidence: {ev.business_purpose_confidence:.0%})")
+                else:
+                    extracted_summary.append("✗ Purpose: not found")
+
+                extraction_note = f"\n\nExtracted from document ({ev.extraction_method}):\n" + "\n".join(extracted_summary)
+                
+                if ev.raw_text:
+                    extraction_note += f"\n\nRaw text sample (first 300 chars):\n{ev.raw_text[:300]}..."
+
+                return json.dumps({
+                    "valid": False,
+                    "mock": False,
+                    "enhanced_reviewer": True,
+                    "approved_for": [],
+                    "final_decision": review_summary.final_decision,
+                    "review_summary": review_summary.to_dict(),
+                    "errors": review_summary.errors,
+                    "warnings": review_summary.warnings,
+                    "message": f"Approval validation {review_summary.final_decision}: {'; '.join(review_summary.errors or review_summary.warnings or ['See review summary'])}{extraction_note}",
+                })
+
+        except Exception as e:
+            # Fallback to mock on any error
+            import traceback
+            error_detail = f"Enhanced reviewer error: {str(e)}\n{traceback.format_exc()}"
+            return json.dumps({
+                "valid": False,
+                "mock": False,
+                "enhanced_reviewer_failed": True,
+                "approved_for": [],
+                "error": error_detail,
+                "message": f"Enhanced reviewer encountered an error. Check logs for details.",
+            })
+
+    # ─── Mock/Legacy Path (default) ──────────────────────────────────────────
     configured_resources = set(requirements.get("resources", []))
     requested_resources = [str(r).strip().lower() for r in resource_types if str(r).strip()]
     approved_for = [r for r in requested_resources if r in configured_resources]

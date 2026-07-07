@@ -66,6 +66,7 @@ rules:
     target_field: data_privacy
     params:
       glue_db:
+        allow_missing: true
         allowed_values:
           - PI
           - PCI
@@ -128,6 +129,7 @@ rules:
     target_field: data_classification
     params:
       glue_db:
+        allow_missing: true
         allowed_values:
           - "Public"
           - "Confidential - General Use"
